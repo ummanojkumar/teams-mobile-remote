@@ -1,0 +1,330 @@
+using System.Net.WebSockets;
+using System.Text;
+using TeamsRemote.Core.Protocol;
+using TeamsRemote.Relay.Routing;
+
+namespace TeamsRemote.Tests;
+
+public sealed class DeviceRouteIsolationTests
+{
+    private class MockWebSocket : WebSocket
+    {
+        private WebSocketState _state = WebSocketState.Open;
+        public List<string> SentMessages { get; } = new();
+
+        public override WebSocketCloseStatus? CloseStatus => WebSocketCloseStatus.NormalClosure;
+        public override string? CloseStatusDescription => null;
+        public override WebSocketState State => _state;
+        public override string? SubProtocol => null;
+
+        public override void Abort() => _state = WebSocketState.Aborted;
+
+        public override Task CloseAsync(WebSocketCloseStatus closeStatus, string? statusDescription, CancellationToken cancellationToken)
+        {
+            _state = WebSocketState.Closed;
+            return Task.CompletedTask;
+        }
+
+        public override Task CloseOutputAsync(WebSocketCloseStatus closeStatus, string? statusDescription, CancellationToken cancellationToken)
+        {
+            _state = WebSocketState.CloseSent;
+            return Task.CompletedTask;
+        }
+
+        public override void Dispose() => _state = WebSocketState.Closed;
+
+        public override Task<WebSocketReceiveResult> ReceiveAsync(ArraySegment<byte> buffer, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new WebSocketReceiveResult(0, WebSocketMessageType.Close, true));
+        }
+
+        public override Task SendAsync(ArraySegment<byte> buffer, WebSocketMessageType messageType, bool endOfMessage, CancellationToken cancellationToken)
+        {
+            if (buffer.Array != null)
+            {
+                var text = Encoding.UTF8.GetString(buffer.Array, buffer.Offset, buffer.Count);
+                SentMessages.Add(text);
+            }
+            return Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task Client_CannotRoute_BeforePairingIsEstablished()
+    {
+        var manager = new DeviceRouteManager();
+        var clientSocket = new MockWebSocket();
+        var clientSession = new RelaySession(clientSocket, SessionType.Client);
+        manager.RegisterSession(clientSession);
+
+        var envelope = ProtocolEnvelope.Create(
+            ProtocolMessageType.Command,
+            new CommandPayload { Command = "test_echo" },
+            Guid.NewGuid());
+
+        bool routed = await manager.RouteMessageAsync(clientSession, envelope);
+        Assert.False(routed);
+    }
+
+    [Fact]
+    public async Task Client_CannotRoute_ToDifferentDeviceRoute()
+    {
+        var manager = new DeviceRouteManager();
+        var compSocket = new MockWebSocket();
+        var compSession = new RelaySession(compSocket, SessionType.Companion);
+        manager.RegisterSession(compSession);
+
+        var clientSocket = new MockWebSocket();
+        var clientSession = new RelaySession(clientSocket, SessionType.Client);
+        manager.RegisterSession(clientSession);
+
+        // Register challenge and pair
+        var challenge = new PairChallengePayload
+        {
+            ChallengeId = Guid.NewGuid(),
+            ShortCode = "123-456",
+            ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(60)
+        };
+        manager.RegisterChallenge(challenge, compSession.SessionId);
+
+        var req = new PairRequestPayload
+        {
+            ChallengeId = challenge.ChallengeId,
+            ShortCode = "123-456",
+            DeviceLabel = "Test Phone"
+        };
+        bool reqForwarded = await manager.ProcessPairRequestAsync(clientSession, req);
+        Assert.True(reqForwarded);
+
+        var pairedDeviceId = Guid.NewGuid();
+        var approve = new PairApprovePayload
+        {
+            ChallengeId = challenge.ChallengeId,
+            Approved = true,
+            DeviceId = pairedDeviceId,
+            SessionToken = "token_abc"
+        };
+        bool approved = await manager.ProcessPairApproveAsync(compSession, approve);
+        Assert.True(approved);
+
+        // Valid route for pairedDeviceId
+        var validEnvelope = ProtocolEnvelope.Create(
+            ProtocolMessageType.Command,
+            new CommandPayload { Command = "test_echo" },
+            pairedDeviceId);
+
+        bool validRouted = await manager.RouteMessageAsync(clientSession, validEnvelope);
+        Assert.True(validRouted);
+
+        // Invalid route spoofing a different device ID
+        var spoofedEnvelope = ProtocolEnvelope.Create(
+            ProtocolMessageType.Command,
+            new CommandPayload { Command = "test_echo" },
+            Guid.NewGuid());
+
+        bool spoofedRouted = await manager.RouteMessageAsync(clientSession, spoofedEnvelope);
+        Assert.False(spoofedRouted);
+    }
+
+    [Fact]
+    public async Task Challenge_ExpiresAfter60s_CannotBeRedeemed()
+    {
+        var manager = new DeviceRouteManager();
+        var compSocket = new MockWebSocket();
+        var compSession = new RelaySession(compSocket, SessionType.Companion);
+        manager.RegisterSession(compSession);
+
+        var clientSocket = new MockWebSocket();
+        var clientSession = new RelaySession(clientSocket, SessionType.Client);
+        manager.RegisterSession(clientSession);
+
+        // Challenge expired in past
+        var challenge = new PairChallengePayload
+        {
+            ChallengeId = Guid.NewGuid(),
+            ShortCode = "111-222",
+            ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(-5)
+        };
+        manager.RegisterChallenge(challenge, compSession.SessionId);
+
+        var req = new PairRequestPayload
+        {
+            ChallengeId = challenge.ChallengeId,
+            ShortCode = "111-222",
+            DeviceLabel = "Expired Phone"
+        };
+
+        bool result = await manager.ProcessPairRequestAsync(clientSession, req);
+        Assert.False(result);
+    }
+
+    [Fact]
+    public async Task Challenge_IsSingleUse_CannotBeRedeemedTwice()
+    {
+        var manager = new DeviceRouteManager();
+        var compSocket = new MockWebSocket();
+        var compSession = new RelaySession(compSocket, SessionType.Companion);
+        manager.RegisterSession(compSession);
+
+        var client1 = new RelaySession(new MockWebSocket(), SessionType.Client);
+        var client2 = new RelaySession(new MockWebSocket(), SessionType.Client);
+        manager.RegisterSession(client1);
+        manager.RegisterSession(client2);
+
+        var challenge = new PairChallengePayload
+        {
+            ChallengeId = Guid.NewGuid(),
+            ShortCode = "333-444",
+            ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(60)
+        };
+        manager.RegisterChallenge(challenge, compSession.SessionId);
+
+        var req1 = new PairRequestPayload
+        {
+            ChallengeId = challenge.ChallengeId,
+            ShortCode = "333-444",
+            DeviceLabel = "First Phone"
+        };
+        bool firstOk = await manager.ProcessPairRequestAsync(client1, req1);
+        Assert.True(firstOk);
+
+        // Second attempt on same challenge must fail
+        var req2 = new PairRequestPayload
+        {
+            ChallengeId = challenge.ChallengeId,
+            ShortCode = "333-444",
+            DeviceLabel = "Second Phone"
+        };
+        bool secondOk = await manager.ProcessPairRequestAsync(client2, req2);
+        Assert.False(secondOk);
+    }
+
+    [Fact]
+    public async Task Challenge_WithIncorrectShortCode_IsRejected()
+    {
+        var manager = new DeviceRouteManager();
+        var compSocket = new MockWebSocket();
+        var compSession = new RelaySession(compSocket, SessionType.Companion);
+        manager.RegisterSession(compSession);
+
+        var clientSession = new RelaySession(new MockWebSocket(), SessionType.Client);
+        manager.RegisterSession(clientSession);
+
+        var challenge = new PairChallengePayload
+        {
+            ChallengeId = Guid.NewGuid(),
+            ShortCode = "555-666",
+            ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(60)
+        };
+        manager.RegisterChallenge(challenge, compSession.SessionId);
+
+        var req = new PairRequestPayload
+        {
+            ChallengeId = challenge.ChallengeId,
+            ShortCode = "999-999", // Mismatch
+            DeviceLabel = "Hacker Phone"
+        };
+
+        bool ok = await manager.ProcessPairRequestAsync(clientSession, req);
+        Assert.False(ok);
+    }
+
+    [Fact]
+    public async Task RevokeDevice_ImmediatelyDropsRoute_AndAbortsClientSocket()
+    {
+        var manager = new DeviceRouteManager();
+        var compSession = new RelaySession(new MockWebSocket(), SessionType.Companion);
+        var clientSocket = new MockWebSocket();
+        var clientSession = new RelaySession(clientSocket, SessionType.Client);
+        manager.RegisterSession(compSession);
+        manager.RegisterSession(clientSession);
+
+        var challenge = new PairChallengePayload
+        {
+            ChallengeId = Guid.NewGuid(),
+            ShortCode = "777-888",
+            ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(60)
+        };
+        manager.RegisterChallenge(challenge, compSession.SessionId);
+
+        await manager.ProcessPairRequestAsync(clientSession, new PairRequestPayload
+        {
+            ChallengeId = challenge.ChallengeId,
+            ShortCode = "777-888",
+            DeviceLabel = "Phone"
+        });
+
+        var deviceId = Guid.NewGuid();
+        await manager.ProcessPairApproveAsync(compSession, new PairApprovePayload
+        {
+            ChallengeId = challenge.ChallengeId,
+            Approved = true,
+            DeviceId = deviceId
+        });
+
+        var envelope = ProtocolEnvelope.Create(
+            ProtocolMessageType.Command,
+            new CommandPayload { Command = "test_echo" },
+            deviceId);
+
+        // Before revocation: route works
+        Assert.True(await manager.RouteMessageAsync(clientSession, envelope));
+
+        // Revoke device
+        manager.RevokeDevice(deviceId);
+
+        // Socket was aborted
+        Assert.Equal(WebSocketState.Aborted, clientSocket.State);
+
+        // Subsequent message routing is immediately rejected
+        Assert.False(await manager.RouteMessageAsync(clientSession, envelope));
+    }
+
+    [Fact]
+    public async Task EnforceSingleActiveDevice_PairingSecondDevice_DropsFirstDeviceRoute()
+    {
+        var manager = new DeviceRouteManager();
+        var compSession = new RelaySession(new MockWebSocket(), SessionType.Companion);
+        manager.RegisterSession(compSession);
+
+        var client1 = new RelaySession(new MockWebSocket(), SessionType.Client);
+        var client2 = new RelaySession(new MockWebSocket(), SessionType.Client);
+        manager.RegisterSession(client1);
+        manager.RegisterSession(client2);
+
+        // Pair Device 1
+        var ch1 = new PairChallengePayload
+        {
+            ChallengeId = Guid.NewGuid(),
+            ShortCode = "111-111",
+            ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(60)
+        };
+        manager.RegisterChallenge(ch1, compSession.SessionId);
+        await manager.ProcessPairRequestAsync(client1, new PairRequestPayload { ChallengeId = ch1.ChallengeId, ShortCode = "111-111" });
+        var dev1 = Guid.NewGuid();
+        await manager.ProcessPairApproveAsync(compSession, new PairApprovePayload { ChallengeId = ch1.ChallengeId, Approved = true, DeviceId = dev1 });
+
+        // Dev1 route is active
+        var env1 = ProtocolEnvelope.Create(ProtocolMessageType.Command, new CommandPayload { Command = "test_echo" }, dev1);
+        Assert.True(await manager.RouteMessageAsync(client1, env1));
+
+        // Pair Device 2
+        var ch2 = new PairChallengePayload
+        {
+            ChallengeId = Guid.NewGuid(),
+            ShortCode = "222-222",
+            ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(60)
+        };
+        manager.RegisterChallenge(ch2, compSession.SessionId);
+        await manager.ProcessPairRequestAsync(client2, new PairRequestPayload { ChallengeId = ch2.ChallengeId, ShortCode = "222-222" });
+        var dev2 = Guid.NewGuid();
+        await manager.ProcessPairApproveAsync(compSession, new PairApprovePayload { ChallengeId = ch2.ChallengeId, Approved = true, DeviceId = dev2 });
+
+        // Dev2 route is active
+        var env2 = ProtocolEnvelope.Create(ProtocolMessageType.Command, new CommandPayload { Command = "test_echo" }, dev2);
+        Assert.True(await manager.RouteMessageAsync(client2, env2));
+
+        // Dev1 route is now cleared because 1 active device limit is enforced
+        Assert.False(await manager.RouteMessageAsync(client1, env1));
+    }
+}
