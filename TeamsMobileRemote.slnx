@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TeamsRemote.Core/TeamsRemote.Core.csproj" />
+    <Project Path="src/TeamsRemote.Diagnostics/TeamsRemote.Diagnostics.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TeamsRemote.Tests/TeamsRemote.Tests.csproj" />
+  </Folder>
+</Solution>
