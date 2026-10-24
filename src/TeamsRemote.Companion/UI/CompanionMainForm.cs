@@ -370,8 +370,9 @@ public sealed class CompanionMainForm : Form
             using var qrBitmap = qrCode.GetGraphic(5);
 
             LogMessage($"Generated single-use pairing challenge ({challenge.ShortCode}). Expires in 60s.");
+            LogMessage($"[PAIRING] Challenge ID: {challenge.ChallengeId}");
 
-            using var qrDialog = new PairingQrDialog(qrBitmap, challenge.ShortCode);
+            using var qrDialog = new PairingQrDialog(qrBitmap, challenge.ShortCode, qrPayload);
             qrDialog.ShowDialog(this);
         }
         catch (Exception ex)

@@ -9,7 +9,7 @@ public sealed class PairingQrDialog : Form
     private int _secondsRemaining = 60;
     private readonly Label _lblTimer;
 
-    public PairingQrDialog(Bitmap qrImage, string confirmationCode)
+    public PairingQrDialog(Bitmap qrImage, string confirmationCode, string? rawPayload = null)
     {
         Text = "Pair Mobile Remote (Single-Use QR)";
         Size = new Size(380, 480);
@@ -70,11 +70,29 @@ public sealed class PairingQrDialog : Form
             ForeColor = Color.FromArgb(220, 53, 69)
         };
 
+        var btnCopy = new Button
+        {
+            Text = "Copy Details",
+            Location = new Point(75, 380),
+            Size = new Size(110, 36),
+            BackColor = Color.FromArgb(13, 110, 253),
+            ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat
+        };
+        btnCopy.Click += (s, e) =>
+        {
+            if (!string.IsNullOrEmpty(rawPayload))
+            {
+                Clipboard.SetText(rawPayload);
+                MessageBox.Show("Pairing JSON payload copied to clipboard!", "Copied", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        };
+
         var btnClose = new Button
         {
             Text = "Close",
-            Location = new Point(140, 380),
-            Size = new Size(100, 36),
+            Location = new Point(195, 380),
+            Size = new Size(110, 36),
             BackColor = Color.FromArgb(108, 117, 125),
             ForeColor = Color.White,
             FlatStyle = FlatStyle.Flat
@@ -86,6 +104,7 @@ public sealed class PairingQrDialog : Form
         Controls.Add(lblCodeDesc);
         Controls.Add(lblCode);
         Controls.Add(_lblTimer);
+        Controls.Add(btnCopy);
         Controls.Add(btnClose);
 
         _countdownTimer = new System.Windows.Forms.Timer { Interval = 1000 };
