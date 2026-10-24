@@ -2,19 +2,19 @@ using System.Diagnostics;
 using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
-using FlaUI.Core.EventHandlers;
 using FlaUI.UIA3;
 using TeamsRemote.Core.Abstractions;
 using TeamsRemote.Core.Classification;
 using TeamsRemote.Core.Models;
 using TeamsRemote.Core.Redaction;
 
-namespace TeamsRemote.Diagnostics.Adapter;
+namespace TeamsRemote.Core.Adapters;
 
 public sealed class UiaTeamsController : ITeamsController
 {
     private static readonly string[] CandidateProcessNames = { "ms-teams", "Teams" };
     private readonly UIA3Automation _automation;
+    private readonly SemaphoreSlim _actionLock = new(1, 1);
     private bool _disposed;
 
     public UiaTeamsController()
@@ -87,6 +87,120 @@ public sealed class UiaTeamsController : ITeamsController
         return Task.FromResult(RedactionHelper.SanitizeReport(report));
     }
 
+    private readonly MicrophoneActionCoordinator _coordinator = new();
+
+    public async Task<MicrophoneCommandResult> SetMicrophoneStateAsync(
+        DesiredMicrophoneState desiredState,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+
+        return await _coordinator.ExecuteAsync(
+            desiredState,
+            controlProvider: () =>
+            {
+                var processInfo = DetectTeamsProcess();
+                if (!processInfo.IsRunning)
+                {
+                    return Task.FromResult((
+                        found: false,
+                        currentState: TeamsControlState.Unknown,
+                        hasPattern: false,
+                        isEnabled: false,
+                        invokeAction: (Action)(() => { })));
+                }
+
+                var (meetingSurface, meetingWindow) = FindMeetingSurface(processInfo.AllProcessIds);
+                if (!meetingSurface.IsDetected || meetingWindow == null)
+                {
+                    return Task.FromResult((
+                        found: false,
+                        currentState: TeamsControlState.Unknown,
+                        hasPattern: false,
+                        isEnabled: false,
+                        invokeAction: (Action)(() => { })));
+                }
+
+                var controls = FindControlElements(meetingWindow);
+                var micElement = controls[TargetControl.Microphone];
+                if (micElement == null)
+                {
+                    return Task.FromResult((
+                        found: false,
+                        currentState: TeamsControlState.Unknown,
+                        hasPattern: false,
+                        isEnabled: false,
+                        invokeAction: (Action)(() => { })));
+                }
+
+                string currentName = micElement.Properties.Name.ValueOrDefault ?? string.Empty;
+                string? currentToggle = micElement.Patterns.Toggle.IsSupported
+                    ? micElement.Patterns.Toggle.PatternOrDefault?.ToggleState.ValueOrDefault.ToString()
+                    : null;
+                string? currentHelp = micElement.Properties.HelpText.ValueOrDefault;
+
+                var (currentState, _) = ControlCapabilityClassifier.ParseState(
+                    TargetControl.Microphone,
+                    currentName,
+                    currentToggle,
+                    currentHelp);
+
+                bool hasToggle = micElement.Patterns.Toggle.IsSupported;
+                bool hasInvoke = micElement.Patterns.Invoke.IsSupported;
+                bool isEnabled = micElement.Properties.IsEnabled.ValueOrDefault;
+
+                Action invokeAction = () =>
+                {
+                    if (hasToggle)
+                    {
+                        micElement.Patterns.Toggle.PatternOrDefault?.Toggle();
+                    }
+                    else
+                    {
+                        micElement.Patterns.Invoke.PatternOrDefault?.Invoke();
+                    }
+                };
+
+                return Task.FromResult((
+                    found: true,
+                    currentState,
+                    hasPattern: hasToggle || hasInvoke,
+                    isEnabled,
+                    invokeAction));
+            },
+            reQueryStateFunc: () =>
+            {
+                var processInfo = DetectTeamsProcess();
+                if (!processInfo.IsRunning)
+                {
+                    return Task.FromResult(TeamsControlState.Unknown);
+                }
+
+                var (_, meetingWindow) = FindMeetingSurface(processInfo.AllProcessIds);
+                if (meetingWindow == null)
+                {
+                    return Task.FromResult(TeamsControlState.Unknown);
+                }
+
+                var controls = FindControlElements(meetingWindow);
+                var micElement = controls[TargetControl.Microphone];
+                if (micElement == null)
+                {
+                    return Task.FromResult(TeamsControlState.Unknown);
+                }
+
+                string name = micElement.Properties.Name.ValueOrDefault ?? string.Empty;
+                string? toggle = micElement.Patterns.Toggle.IsSupported
+                    ? micElement.Patterns.Toggle.PatternOrDefault?.ToggleState.ValueOrDefault.ToString()
+                    : null;
+
+                var (state, _) = ControlCapabilityClassifier.ParseState(TargetControl.Microphone, name, toggle);
+                return Task.FromResult(state);
+            },
+            verificationTimeout: TimeSpan.FromSeconds(2),
+            cancellationToken: cancellationToken);
+    }
+
     public async Task ObserveEventsAsync(
         TimeSpan duration,
         Action<ControlEventReport> onEventObserved,
@@ -117,7 +231,6 @@ public sealed class UiaTeamsController : ITeamsController
 
                 try
                 {
-                    // Register property changed event for Name and ToggleState if supported
                     var propHandler = element.RegisterPropertyChangedEvent(
                         TreeScope.Element,
                         (automationElement, propertyId, newValue) =>
@@ -150,7 +263,6 @@ public sealed class UiaTeamsController : ITeamsController
                 }
             }
 
-            // Wait for specified duration or cancellation
             try
             {
                 await Task.Delay(duration, cancellationToken);
@@ -224,7 +336,6 @@ public sealed class UiaTeamsController : ITeamsController
             var desktop = _automation.GetDesktop();
             var cf = _automation.ConditionFactory;
 
-            // Search top-level windows belonging to any of the Teams processes
             var candidateWindows = desktop.FindAllChildren(cf.ByControlType(FlaUI.Core.Definitions.ControlType.Window));
 
             AutomationElement? bestMeetingWindow = null;
@@ -244,7 +355,6 @@ public sealed class UiaTeamsController : ITeamsController
                     string title = window.Properties.Name.ValueOrDefault ?? string.Empty;
                     string className = window.Properties.ClassName.ValueOrDefault ?? string.Empty;
 
-                    // Check if this window hosts meeting controls
                     var elements = FindControlElements(window);
                     bool hasMeetingControls = elements.Values.Any(v => v != null);
 
@@ -256,7 +366,6 @@ public sealed class UiaTeamsController : ITeamsController
                         break;
                     }
 
-                    // Secondary check: window title with Teams meeting pattern
                     if (title.Contains("| Microsoft Teams", StringComparison.OrdinalIgnoreCase))
                     {
                         bestMeetingWindow = window;
@@ -266,7 +375,7 @@ public sealed class UiaTeamsController : ITeamsController
                 }
                 catch
                 {
-                    // Handle stale or closed window during enumeration
+                    // Stale window
                 }
             }
 
@@ -313,7 +422,6 @@ public sealed class UiaTeamsController : ITeamsController
         try
         {
             var cf = _automation.ConditionFactory;
-            // Narrow query to clickable control types
             var condition = cf.ByControlType(FlaUI.Core.Definitions.ControlType.Button)
                 .Or(cf.ByControlType(FlaUI.Core.Definitions.ControlType.SplitButton))
                 .Or(cf.ByControlType(FlaUI.Core.Definitions.ControlType.CheckBox));
@@ -327,19 +435,16 @@ public sealed class UiaTeamsController : ITeamsController
                     string name = el.Properties.Name.ValueOrDefault ?? string.Empty;
                     string autoId = el.Properties.AutomationId.ValueOrDefault ?? string.Empty;
 
-                    // Match Microphone
                     if (result[TargetControl.Microphone] == null && IsMicrophoneControl(name, autoId))
                     {
                         result[TargetControl.Microphone] = el;
                     }
 
-                    // Match Camera
                     if (result[TargetControl.Camera] == null && IsCameraControl(name, autoId))
                     {
                         result[TargetControl.Camera] = el;
                     }
 
-                    // Match Hand
                     if (result[TargetControl.Hand] == null && IsHandControl(name, autoId))
                     {
                         result[TargetControl.Hand] = el;
@@ -374,7 +479,7 @@ public sealed class UiaTeamsController : ITeamsController
             var el = elements[target];
             if (el == null)
             {
-                reports.Add(CreateMissingControl(target, $"Control element was not found in meeting window."));
+                reports.Add(CreateMissingControl(target, "Control element was not found in meeting window."));
                 continue;
             }
 
@@ -416,21 +521,18 @@ public sealed class UiaTeamsController : ITeamsController
                     supportedPatterns.Add("SelectionItemPattern");
                 }
 
-                // Parse state and source
                 var (readableState, stateSource) = ControlCapabilityClassifier.ParseState(
                     target,
                     name,
                     toggleStateStr,
                     helpText);
 
-                // Classify capability tier
                 var (tier, reason) = ControlCapabilityClassifier.Classify(
                     isFound: true,
                     isEnabled: isEnabled,
                     readableState: readableState,
                     supportedPatterns: supportedPatterns);
 
-                // Check event observability capability
                 bool isEventObservable = el.Patterns.Toggle.IsSupported || !string.IsNullOrEmpty(name);
 
                 reports.Add(new ControlDiagnosticInfo
@@ -516,6 +618,7 @@ public sealed class UiaTeamsController : ITeamsController
     {
         if (!_disposed)
         {
+            _actionLock.Dispose();
             _automation.Dispose();
             _disposed = true;
         }

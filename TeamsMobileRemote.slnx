@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/TeamsRemote.Companion/TeamsRemote.Companion.csproj" />
     <Project Path="src/TeamsRemote.Core/TeamsRemote.Core.csproj" />
     <Project Path="src/TeamsRemote.Diagnostics/TeamsRemote.Diagnostics.csproj" />
   </Folder>

@@ -1,5 +1,5 @@
 using TeamsRemote.Core.Abstractions;
-using TeamsRemote.Diagnostics.Adapter;
+using TeamsRemote.Core.Adapters;
 using TeamsRemote.Diagnostics.Formatting;
 
 namespace TeamsRemote.Diagnostics;

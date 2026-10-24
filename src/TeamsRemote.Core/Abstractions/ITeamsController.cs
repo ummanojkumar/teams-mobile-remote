@@ -18,4 +18,13 @@ public interface ITeamsController : IDisposable
         TimeSpan duration,
         Action<ControlEventReport> onEventObserved,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Executes an explicit desired-state transition for the microphone (muted/unmuted).
+    /// Pre-action state is checked, action is invoked only if needed, and the outcome
+    /// is verified via UIA event or bounded re-query before returning confirmed.
+    /// </summary>
+    Task<MicrophoneCommandResult> SetMicrophoneStateAsync(
+        DesiredMicrophoneState desiredState,
+        CancellationToken cancellationToken = default);
 }
