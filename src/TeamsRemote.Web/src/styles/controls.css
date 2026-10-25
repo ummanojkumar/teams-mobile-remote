@@ -127,6 +127,20 @@
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
+/* Phase 4B Observe-Only Badge */
+.phase-observe-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
 /* Card Body */
 .card-body {
   display: flex;

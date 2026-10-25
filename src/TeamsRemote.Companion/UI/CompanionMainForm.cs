@@ -507,16 +507,18 @@ public sealed class CompanionMainForm : Form
             _lblMeetingStatus.Text = $"Meeting Surface: DETECTED ({report.MeetingSurface.RedactedWindowTitle})";
             _lblMeetingStatus.ForeColor = Color.FromArgb(13, 110, 253);
 
+            await _passiveObserver.PollOnceAsync();
+
             var mic = report.Controls.FirstOrDefault(c => c.TargetControl == TargetControl.Microphone);
+            var camera = report.Controls.FirstOrDefault(c => c.TargetControl == TargetControl.Camera);
+
             if (mic != null && mic.Found && mic.ReadableState != TeamsControlState.Unknown)
             {
-                _stateStore.UpdateObserved(mic.ReadableState, isConfirmed: true, meetingStatus: "active");
                 LogMessage($"Scan complete: Microphone is {mic.ReadableState.ToUpperInvariant()} (Tier: {mic.CapabilityTier.ToWireString()}).");
             }
-            else
+            if (camera != null && camera.Found && camera.ReadableState != TeamsControlState.Unknown)
             {
-                _stateStore.UpdateObserved(TeamsControlState.Unknown, isConfirmed: false, meetingStatus: "active");
-                LogMessage("Scan complete: Meeting detected, but microphone control could not be verified.");
+                LogMessage($"Scan complete: Camera is {camera.ReadableState.ToUpperInvariant()} (Tier: {camera.CapabilityTier.ToWireString()}).");
             }
         }
         catch (Exception ex)

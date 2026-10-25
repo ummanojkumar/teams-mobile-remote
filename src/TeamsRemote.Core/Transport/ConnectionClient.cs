@@ -236,11 +236,16 @@ public sealed class ConnectionClient : IAsyncDisposable
 
     public async Task SendStateSnapshotAsync(CancellationToken cancellationToken = default)
     {
-        var (rev, micState, conf, meeting) = _stateStore.GetSnapshot();
+        var (rev, micState, micConf, cameraState, cameraCap, cameraConf, meeting) = _stateStore.GetFullSnapshot();
 
         bool isMicUnavailable = string.Equals(micState, TeamsControlState.Unknown, StringComparison.OrdinalIgnoreCase) ||
                                 string.Equals(meeting, "none", StringComparison.OrdinalIgnoreCase) ||
-                                conf == StateConfidence.Unknown;
+                                micConf == StateConfidence.Unknown;
+
+        bool isCameraUnavailable = string.Equals(cameraState, TeamsControlState.Unknown, StringComparison.OrdinalIgnoreCase) ||
+                                   string.Equals(meeting, "none", StringComparison.OrdinalIgnoreCase) ||
+                                   cameraCap == ControlCapabilityTier.Unavailable ||
+                                   cameraConf == StateConfidence.Unknown;
 
         var snapshot = new StateSnapshotPayload
         {
@@ -252,7 +257,19 @@ public sealed class ConnectionClient : IAsyncDisposable
                 {
                     Value = micState,
                     Capability = isMicUnavailable ? "unavailable" : "verified",
-                    Confidence = conf.ToString().ToLowerInvariant()
+                    Confidence = micConf.ToString().ToLowerInvariant()
+                },
+                ["camera"] = new ControlSnapshotItem
+                {
+                    Value = cameraState,
+                    Capability = isCameraUnavailable ? "unavailable" : cameraCap.ToWireString(),
+                    Confidence = cameraConf.ToString().ToLowerInvariant()
+                },
+                ["hand"] = new ControlSnapshotItem
+                {
+                    Value = "unknown",
+                    Capability = "unavailable",
+                    Confidence = "unknown"
                 }
             },
             Connection = "connected",

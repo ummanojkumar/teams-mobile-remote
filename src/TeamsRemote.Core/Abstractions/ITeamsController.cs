@@ -34,4 +34,11 @@ public interface ITeamsController : IDisposable
     /// Returns an IDisposable that unregisters the UIA event handlers, or null if subscription failed.
     /// </summary>
     IDisposable? SubscribeMicrophoneStateChanged(Action onStateChangeDetected);
+
+    /// <summary>
+    /// Subscribes to camera state-change events on the active meeting control.
+    /// Invokes onStateChangeDetected when a UIA property change (e.g. Name or ToggleState) is raised.
+    /// Returns an IDisposable that unregisters the UIA event handlers, or null if subscription failed.
+    /// </summary>
+    IDisposable? SubscribeCameraStateChanged(Action onStateChangeDetected);
 }

@@ -241,6 +241,46 @@ public sealed class UiaTeamsController : ITeamsController
         }
     }
 
+    public IDisposable? SubscribeCameraStateChanged(Action onStateChangeDetected)
+    {
+        ThrowIfDisposed();
+
+        try
+        {
+            var processInfo = DetectTeamsProcess();
+            if (!processInfo.IsRunning) return null;
+
+            var (surface, meetingWindow) = FindMeetingSurface(processInfo.AllProcessIds);
+            if (!surface.IsDetected || meetingWindow == null) return null;
+
+            var controls = FindControlElements(meetingWindow);
+            var cameraElement = controls[TargetControl.Camera];
+            if (cameraElement == null) return null;
+
+            var propHandler = cameraElement.RegisterPropertyChangedEvent(
+                TreeScope.Element,
+                (automationElement, propertyId, newValue) =>
+                {
+                    try
+                    {
+                        onStateChangeDetected();
+                    }
+                    catch
+                    {
+                        // Safe swallow on background MTA callback
+                    }
+                },
+                _automation.PropertyLibrary.Element.Name,
+                _automation.PropertyLibrary.Toggle.ToggleState);
+
+            return propHandler;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public async Task ObserveEventsAsync(
         TimeSpan duration,
         Action<ControlEventReport> onEventObserved,
@@ -568,6 +608,7 @@ public sealed class UiaTeamsController : ITeamsController
                     helpText);
 
                 var (tier, reason) = ControlCapabilityClassifier.Classify(
+                    targetControl: target,
                     isFound: true,
                     isEnabled: isEnabled,
                     readableState: readableState,
@@ -617,7 +658,8 @@ public sealed class UiaTeamsController : ITeamsController
         return id.Contains("video") || id.Contains("camera") ||
                n.Contains("turn camera on") || n.Contains("turn camera off") ||
                n.Contains("turn off camera") || n.Contains("turn on camera") ||
-               n.Contains("stop video") || n.Contains("start video");
+               n.Contains("stop video") || n.Contains("start video") ||
+               (n.Contains("camera") && (n.Contains("turn") || n.Contains("video") || n.Contains("ctrl+shift+o")));
     }
 
     private static bool IsHandControl(string name, string autoId)

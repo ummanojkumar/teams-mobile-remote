@@ -25,7 +25,8 @@ public sealed class TeamsPassiveStateObserver : IDisposable
     private readonly SemaphoreSlim _reQueryLock = new(1, 1);
     private readonly object _subLock = new();
 
-    private IDisposable? _currentUiaSubscription;
+    private IDisposable? _currentMicSubscription;
+    private IDisposable? _currentCameraSubscription;
     private Timer? _debounceTimer;
     private CancellationTokenSource? _pollingCts;
     private Task? _pollingTask;
@@ -72,7 +73,7 @@ public sealed class TeamsPassiveStateObserver : IDisposable
     }
 
     /// <summary>
-    /// Simulates or receives a notification that a UIA property change occurred.
+    /// Simulates or receives a notification that a UIA property change occurred on Mic or Camera.
     /// Coalesces burst events using a debounce timer, then re-queries Teams state.
     /// </summary>
     public void OnUiaEventRaised()
@@ -155,34 +156,72 @@ public sealed class TeamsPassiveStateObserver : IDisposable
             // Case 1: Teams is not running
             if (!report.Process.IsRunning)
             {
-                DisposeCurrentSubscription();
+                DisposeCurrentSubscriptions();
                 return _stateStore.MarkUnavailable("none");
             }
 
             // Case 2: Teams is running, but no meeting window detected
             if (!report.MeetingSurface.IsDetected)
             {
-                DisposeCurrentSubscription();
+                DisposeCurrentSubscriptions();
                 return _stateStore.MarkUnavailable("none");
             }
 
-            // Case 3: Active meeting surface detected
+            // Case 3: Active meeting surface detected - inspect both Microphone and Camera
             var mic = report.Controls.FirstOrDefault(c => c.TargetControl == TargetControl.Microphone);
-            if (mic == null || !mic.Found || mic.ReadableState == TeamsControlState.Unknown)
+            var camera = report.Controls.FirstOrDefault(c => c.TargetControl == TargetControl.Camera);
+
+            string micState = (mic != null && mic.Found && mic.ReadableState != TeamsControlState.Unknown)
+                ? mic.ReadableState
+                : TeamsControlState.Unknown;
+            bool isMicConfirmed = micState != TeamsControlState.Unknown;
+
+            string cameraState = (camera != null && camera.Found && camera.ReadableState != TeamsControlState.Unknown)
+                ? camera.ReadableState
+                : TeamsControlState.Unknown;
+
+            // Phase 4B Rule: Camera capability strictly remains ObserveOnly when readable (never Verified in 4B).
+            // Confidence is Confirmed when observed state is trustworthy.
+            ControlCapabilityTier cameraCap = (cameraState != TeamsControlState.Unknown)
+                ? ControlCapabilityTier.ObserveOnly
+                : ControlCapabilityTier.Unavailable;
+
+            StateConfidence cameraConf = (cameraState != TeamsControlState.Unknown)
+                ? StateConfidence.Confirmed
+                : StateConfidence.Unknown;
+
+            if (micState == TeamsControlState.Unknown && cameraState == TeamsControlState.Unknown)
             {
-                DisposeCurrentSubscription();
-                return _stateStore.UpdateObserved(TeamsControlState.Unknown, isConfirmed: false, meetingStatus: "active");
+                DisposeCurrentSubscriptions();
+                return _stateStore.UpdateObserved(
+                    TeamsControlState.Unknown,
+                    TeamsControlState.Unknown,
+                    isConfirmed: false,
+                    meetingStatus: "active",
+                    cameraCapability: ControlCapabilityTier.Unavailable,
+                    cameraConfidence: StateConfidence.Unknown);
             }
 
-            // Case 4: Microphone is readable and valid in active meeting
-            EnsureUiaSubscription();
+            EnsureUiaSubscriptions();
 
-            return _stateStore.UpdateObserved(mic.ReadableState, isConfirmed: true, meetingStatus: "active");
+            return _stateStore.UpdateObserved(
+                micState,
+                cameraState,
+                isConfirmed: isMicConfirmed,
+                meetingStatus: "active",
+                cameraCapability: cameraCap,
+                cameraConfidence: cameraConf);
         }
         catch
         {
-            DisposeCurrentSubscription();
-            return _stateStore.UpdateObserved(TeamsControlState.Unknown, isConfirmed: false, meetingStatus: "active");
+            DisposeCurrentSubscriptions();
+            return _stateStore.UpdateObserved(
+                TeamsControlState.Unknown,
+                TeamsControlState.Unknown,
+                isConfirmed: false,
+                meetingStatus: "active",
+                cameraCapability: ControlCapabilityTier.Unavailable,
+                cameraConfidence: StateConfidence.Unknown);
         }
         finally
         {
@@ -190,32 +229,45 @@ public sealed class TeamsPassiveStateObserver : IDisposable
         }
     }
 
-    private void EnsureUiaSubscription()
+    private void EnsureUiaSubscriptions()
     {
         lock (_subLock)
         {
-            if (_currentUiaSubscription != null) return;
-
-            try
+            if (_currentMicSubscription == null)
             {
-                _currentUiaSubscription = _teamsController.SubscribeMicrophoneStateChanged(() => OnUiaEventRaised());
+                try
+                {
+                    _currentMicSubscription = _teamsController.SubscribeMicrophoneStateChanged(() => OnUiaEventRaised());
+                }
+                catch
+                {
+                    _currentMicSubscription = null;
+                }
             }
-            catch
+
+            if (_currentCameraSubscription == null)
             {
-                _currentUiaSubscription = null;
+                try
+                {
+                    _currentCameraSubscription = _teamsController.SubscribeCameraStateChanged(() => OnUiaEventRaised());
+                }
+                catch
+                {
+                    _currentCameraSubscription = null;
+                }
             }
         }
     }
 
-    private void DisposeCurrentSubscription()
+    private void DisposeCurrentSubscriptions()
     {
         lock (_subLock)
         {
-            if (_currentUiaSubscription != null)
+            if (_currentMicSubscription != null)
             {
                 try
                 {
-                    _currentUiaSubscription.Dispose();
+                    _currentMicSubscription.Dispose();
                 }
                 catch
                 {
@@ -223,7 +275,23 @@ public sealed class TeamsPassiveStateObserver : IDisposable
                 }
                 finally
                 {
-                    _currentUiaSubscription = null;
+                    _currentMicSubscription = null;
+                }
+            }
+
+            if (_currentCameraSubscription != null)
+            {
+                try
+                {
+                    _currentCameraSubscription.Dispose();
+                }
+                catch
+                {
+                    // Ignore disposal error
+                }
+                finally
+                {
+                    _currentCameraSubscription = null;
                 }
             }
         }
@@ -243,7 +311,7 @@ public sealed class TeamsPassiveStateObserver : IDisposable
             _debounceTimer = null;
         }
 
-        DisposeCurrentSubscription();
+        DisposeCurrentSubscriptions();
         _reQueryLock.Dispose();
     }
 }

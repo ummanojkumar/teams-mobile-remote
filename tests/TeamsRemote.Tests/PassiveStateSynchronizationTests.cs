@@ -14,8 +14,14 @@ public class PassiveStateSynchronizationTests
         public bool MicFound { get; set; } = true;
         public string CurrentMicState { get; set; } = TeamsControlState.Muted;
 
-        public int SubscriptionCreatedCount { get; private set; }
-        public int SubscriptionDisposedCount { get; private set; }
+        public int MicSubscriptionCreatedCount { get; private set; }
+        public int MicSubscriptionDisposedCount { get; private set; }
+        public int CameraSubscriptionCreatedCount { get; private set; }
+        public int CameraSubscriptionDisposedCount { get; private set; }
+
+        public int SubscriptionCreatedCount => MicSubscriptionCreatedCount + CameraSubscriptionCreatedCount;
+        public int SubscriptionDisposedCount => MicSubscriptionDisposedCount + CameraSubscriptionDisposedCount;
+
         public Action? RegisteredUiaCallback { get; private set; }
 
         public Task<TeamsDiagnosticReport> InspectAsync(CancellationToken cancellationToken = default)
@@ -58,16 +64,25 @@ public class PassiveStateSynchronizationTests
 
         public IDisposable? SubscribeMicrophoneStateChanged(Action onStateChangeDetected)
         {
-            SubscriptionCreatedCount++;
+            MicSubscriptionCreatedCount++;
             RegisteredUiaCallback = onStateChangeDetected;
 
             return new SubscriptionToken(() =>
             {
-                SubscriptionDisposedCount++;
+                MicSubscriptionDisposedCount++;
                 if (RegisteredUiaCallback == onStateChangeDetected)
                 {
                     RegisteredUiaCallback = null;
                 }
+            });
+        }
+
+        public IDisposable? SubscribeCameraStateChanged(Action onStateChangeDetected)
+        {
+            CameraSubscriptionCreatedCount++;
+            return new SubscriptionToken(() =>
+            {
+                CameraSubscriptionDisposedCount++;
             });
         }
 
@@ -272,26 +287,34 @@ public class PassiveStateSynchronizationTests
 
         using var observer = new TeamsPassiveStateObserver(controller, stateStore);
 
-        // Initial scan: establishes 1st subscription
+        // Initial scan: establishes subscriptions (1 mic + 1 camera)
         await observer.PollOnceAsync();
-        Assert.Equal(1, controller.SubscriptionCreatedCount);
+        Assert.Equal(1, controller.MicSubscriptionCreatedCount);
+        Assert.Equal(1, controller.CameraSubscriptionCreatedCount);
+        Assert.Equal(2, controller.SubscriptionCreatedCount);
         Assert.Equal(0, controller.SubscriptionDisposedCount);
 
-        // Meeting drops: disposes subscription
+        // Meeting drops: disposes both subscriptions
         controller.MeetingDetected = false;
         await observer.PollOnceAsync();
-        Assert.Equal(1, controller.SubscriptionCreatedCount);
-        Assert.Equal(1, controller.SubscriptionDisposedCount);
+        Assert.Equal(2, controller.SubscriptionCreatedCount);
+        Assert.Equal(1, controller.MicSubscriptionDisposedCount);
+        Assert.Equal(1, controller.CameraSubscriptionDisposedCount);
+        Assert.Equal(2, controller.SubscriptionDisposedCount);
 
-        // Meeting resumes: re-establishes 2nd subscription
+        // Meeting resumes: re-establishes both subscriptions
         controller.MeetingDetected = true;
         await observer.PollOnceAsync();
-        Assert.Equal(2, controller.SubscriptionCreatedCount);
-        Assert.Equal(1, controller.SubscriptionDisposedCount);
-
-        // Observer disposed: disposes 2nd subscription cleanly
-        observer.Dispose();
-        Assert.Equal(2, controller.SubscriptionCreatedCount);
+        Assert.Equal(2, controller.MicSubscriptionCreatedCount);
+        Assert.Equal(2, controller.CameraSubscriptionCreatedCount);
+        Assert.Equal(4, controller.SubscriptionCreatedCount);
         Assert.Equal(2, controller.SubscriptionDisposedCount);
+
+        // Observer disposed: disposes both subscriptions cleanly
+        observer.Dispose();
+        Assert.Equal(4, controller.SubscriptionCreatedCount);
+        Assert.Equal(2, controller.MicSubscriptionDisposedCount);
+        Assert.Equal(2, controller.CameraSubscriptionDisposedCount);
+        Assert.Equal(4, controller.SubscriptionDisposedCount);
     }
 }

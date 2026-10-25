@@ -131,8 +131,12 @@ export const ControlCard: React.FC<ControlCardProps> = ({
     subtext = value === 'muted' ? 'Tap below to unmute microphone' : 'Tap below to mute microphone';
   } else if (isMic) {
     subtext = 'Microphone control waiting for verified Teams meeting state';
+  } else if (type === 'camera') {
+    subtext = capability === 'observe-only'
+      ? 'Camera observation active (Phase 4B spike) — control disabled'
+      : 'Camera control unavailable in current Teams window';
   } else {
-    subtext = 'Remote control disabled in Phase 4A proof of transport';
+    subtext = 'Remote control disabled';
   }
 
   return (
@@ -150,14 +154,19 @@ export const ControlCard: React.FC<ControlCardProps> = ({
           </span>
         </div>
 
-        {/* Phase Badge */}
+        {/* Phase / Capability Badge */}
         {isMic && capability === 'verified' ? (
           <div className="active-verified-badge" title="Remote microphone control active">
             <CheckCircle size={12} />
             <span>Remote Active</span>
           </div>
+        ) : type === 'camera' && capability === 'observe-only' ? (
+          <div className="phase-observe-badge" title="Camera capability: observe-only (Phase 4B spike)">
+            <Lock size={12} />
+            <span>Observe-Only</span>
+          </div>
         ) : (
-          <div className="phase3-locked-badge" title={isMic ? 'Microphone locked' : 'Remote control locked in Phase 4A'}>
+          <div className="phase3-locked-badge" title={isMic ? 'Microphone locked' : 'Remote control locked'}>
             <Lock size={12} />
             <span>Not enabled yet</span>
           </div>

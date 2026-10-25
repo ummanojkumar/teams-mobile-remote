@@ -16,8 +16,10 @@ public static class ControlCapabilityClassifier
 
     /// <summary>
     /// Classifies a control into Verified, ObserveOnly, or Unavailable according to architecture rules.
+    /// In Phase 4B, Camera capability strictly remains ObserveOnly when readable.
     /// </summary>
     public static (ControlCapabilityTier Tier, string Reason) Classify(
+        TargetControl targetControl,
         bool isFound,
         bool isEnabled,
         string readableState,
@@ -31,6 +33,15 @@ public static class ControlCapabilityClassifier
         if (string.Equals(readableState, TeamsControlState.Unknown, StringComparison.OrdinalIgnoreCase))
         {
             return (ControlCapabilityTier.Unavailable, "Control was detected but its state could not be determined.");
+        }
+
+        // Phase 4B Rule: Camera capability must remain observe-only during read-only feasibility spike.
+        // Verified tier is reserved for Phase 4C after desired-state execution and safety gates are separately proven.
+        if (targetControl == TargetControl.Camera)
+        {
+            return (
+                ControlCapabilityTier.ObserveOnly,
+                $"Camera state '{readableState}' is observable. Capability is observe-only in Phase 4B feasibility spike.");
         }
 
         var patterns = supportedPatterns.ToList();
@@ -54,6 +65,13 @@ public static class ControlCapabilityClassifier
             ControlCapabilityTier.ObserveOnly,
             $"State '{readableState}' is readable, but no actionable execution pattern (Toggle/Invoke/SelectionItem) is supported.");
     }
+
+    public static (ControlCapabilityTier Tier, string Reason) Classify(
+        bool isFound,
+        bool isEnabled,
+        string readableState,
+        IEnumerable<string> supportedPatterns) =>
+        Classify(TargetControl.Microphone, isFound, isEnabled, readableState, supportedPatterns);
 
     /// <summary>
     /// Infers the canonical control state from accessible name, toggle state, and help text.
@@ -117,15 +135,20 @@ public static class ControlCapabilityClassifier
                 break;
 
             case TargetControl.Camera:
-                if (lower.Contains("turn camera on") || lower.Contains("turn on camera") || lower.Contains("start video"))
+                // Check "turn off" before "turn on" and "camera is on" before "camera is off"
+                if (lower.Contains("turn camera off") || lower.Contains("turn off camera") ||
+                    lower.Contains("stop video") || lower.Contains("camera is on") ||
+                    lower.Contains("video enabled") || lower.Contains("video is on"))
                 {
-                    // Action is to turn on, so currently OFF
-                    return (TeamsControlState.Off, true);
-                }
-                if (lower.Contains("turn camera off") || lower.Contains("turn off camera") || lower.Contains("stop video"))
-                {
-                    // Action is to turn off, so currently ON
+                    // Action is to turn off, or status is on -> currently ON
                     return (TeamsControlState.On, true);
+                }
+                if (lower.Contains("turn camera on") || lower.Contains("turn on camera") ||
+                    lower.Contains("start video") || lower.Contains("camera is off") ||
+                    lower.Contains("video disabled") || lower.Contains("video is off"))
+                {
+                    // Action is to turn on, or status is off -> currently OFF
+                    return (TeamsControlState.Off, true);
                 }
                 break;
 
