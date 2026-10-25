@@ -35,13 +35,17 @@ public static class ControlCapabilityClassifier
             return (ControlCapabilityTier.Unavailable, "Control was detected but its state could not be determined.");
         }
 
-        // Phase 4B Rule: Camera capability must remain observe-only during read-only feasibility spike.
-        // Verified tier is reserved for Phase 4C after desired-state execution and safety gates are separately proven.
+        // Phase 4C Rule: Static classification for camera remains observe-only.
+        // Promotion to 'verified' occurs dynamically in MeetingStateStore ONLY after a requested action
+        // is independently verified through post-action UIA event or re-query.
         if (targetControl == TargetControl.Camera)
         {
+            var isActionEligible = isEnabled && supportedPatterns.Any(p => ActionablePatterns.Contains(p));
             return (
                 ControlCapabilityTier.ObserveOnly,
-                $"Camera state '{readableState}' is observable. Capability is observe-only in Phase 4B feasibility spike.");
+                isActionEligible
+                    ? $"Camera state '{readableState}' is observable (observe-only, action-eligible). Capability promotes to verified upon confirmed post-action UIA verification."
+                    : $"Camera state '{readableState}' is observable (observe-only). Action patterns unavailable or control disabled.");
         }
 
         var patterns = supportedPatterns.ToList();
@@ -72,6 +76,17 @@ public static class ControlCapabilityClassifier
         string readableState,
         IEnumerable<string> supportedPatterns) =>
         Classify(TargetControl.Microphone, isFound, isEnabled, readableState, supportedPatterns);
+
+    public static bool IsActionEligible(
+        bool isFound,
+        bool isEnabled,
+        string readableState,
+        IEnumerable<string> supportedPatterns)
+    {
+        if (!isFound || !isEnabled) return false;
+        if (string.Equals(readableState, TeamsControlState.Unknown, StringComparison.OrdinalIgnoreCase)) return false;
+        return supportedPatterns.Any(p => ActionablePatterns.Contains(p));
+    }
 
     /// <summary>
     /// Infers the canonical control state from accessible name, toggle state, and help text.

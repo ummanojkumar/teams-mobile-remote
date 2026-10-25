@@ -3,69 +3,110 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { ControlCard } from '../src/components/ControlCard';
 import type { ControlSnapshotItem } from '../src/types';
 
-describe('Phase 4B Camera Feasibility Spike: ControlCard', () => {
-  const cameraOffObserved: ControlSnapshotItem = {
+describe('Phase 4C Remote Camera Control: ControlCard', () => {
+  const cameraOffActionEligible: ControlSnapshotItem = {
     value: 'off',
     capability: 'observe-only',
     confidence: 'confirmed',
   };
 
-  const cameraOnObserved: ControlSnapshotItem = {
+  const cameraOnActionEligible: ControlSnapshotItem = {
     value: 'on',
     capability: 'observe-only',
     confidence: 'confirmed',
   };
 
-  it('renders "Camera Off" with confirmed confidence badge and observe-only capability badge', () => {
-    render(<ControlCard type="camera" snapshot={cameraOffObserved} isConnected={true} />);
+  const cameraOnVerified: ControlSnapshotItem = {
+    value: 'on',
+    capability: 'verified',
+    confidence: 'confirmed',
+  };
+
+  it('renders "Camera Off" with confirmed confidence badge, observe-only capability badge, and action-eligible subtext', () => {
+    render(<ControlCard type="camera" snapshot={cameraOffActionEligible} isConnected={true} />);
 
     expect(screen.getByText('Camera')).toBeInTheDocument();
     expect(screen.getByText('Camera Off')).toBeInTheDocument();
     expect(screen.getByText('CONFIRMED')).toBeInTheDocument();
     expect(screen.getByText('Observe-Only')).toBeInTheDocument();
     expect(
-      screen.getByText('Camera observation active (Phase 4B spike) — control disabled')
+      screen.getByText('Camera action-eligible — tap to turn on and verify control')
     ).toBeInTheDocument();
   });
 
   it('passively flips to "Camera On" with theme-on styling when snapshot value is on', () => {
     const { rerender } = render(
-      <ControlCard type="camera" snapshot={cameraOffObserved} isConnected={true} />
+      <ControlCard type="camera" snapshot={cameraOffActionEligible} isConnected={true} />
     );
     expect(screen.getByText('Camera Off')).toBeInTheDocument();
 
-    rerender(<ControlCard type="camera" snapshot={cameraOnObserved} isConnected={true} />);
+    rerender(<ControlCard type="camera" snapshot={cameraOnActionEligible} isConnected={true} />);
     expect(screen.getByText('Camera On')).toBeInTheDocument();
 
     const card = screen.getByTestId('control-card-camera');
     expect(card.className).toContain('theme-on');
   });
 
-  it('Camera card button is permanently disabled regardless of confirmed detection success', () => {
-    render(<ControlCard type="camera" snapshot={cameraOnObserved} isConnected={true} />);
-
-    const button = screen.getByTestId('camera-action-locked');
-    expect(button).toBeDisabled();
-    expect(button).toHaveAttribute('aria-disabled', 'true');
-    expect(button).toHaveTextContent('Not enabled yet (Phase 4B/C)');
-  });
-
-  it('clicking Camera button triggers zero actions and dispatches zero commands', () => {
+  it('Camera card button is actionable when observe-only and confirmed (action-eligible)', () => {
     const actionSpy = vi.fn();
     render(
       <ControlCard
         type="camera"
-        snapshot={cameraOnObserved}
+        snapshot={cameraOffActionEligible}
         isConnected={true}
-        onAction={actionSpy}
+        onCameraAction={actionSpy}
       />
     );
 
-    const button = screen.getByTestId('camera-action-locked');
-    fireEvent.click(button);
+    const button = screen.getByTestId('camera-action-on');
+    expect(button).not.toBeDisabled();
+    expect(button).toHaveTextContent('Turn Camera On');
 
-    expect(actionSpy).not.toHaveBeenCalled();
+    fireEvent.click(button);
+    expect(actionSpy).toHaveBeenCalledWith('on');
+  });
+
+  it('When camera is On, button displays "Turn Camera Off" and invokes onCameraAction("off")', () => {
+    const actionSpy = vi.fn();
+    render(
+      <ControlCard
+        type="camera"
+        snapshot={cameraOnActionEligible}
+        isConnected={true}
+        onCameraAction={actionSpy}
+      />
+    );
+
+    const button = screen.getByTestId('camera-action-off');
+    expect(button).not.toBeDisabled();
+    expect(button).toHaveTextContent('Turn Camera Off');
+
+    fireEvent.click(button);
+    expect(actionSpy).toHaveBeenCalledWith('off');
+  });
+
+  it('promotes capability badge to "Remote Active" when capability is verified', () => {
+    render(<ControlCard type="camera" snapshot={cameraOnVerified} isConnected={true} />);
+
+    expect(screen.getByText('Remote Active')).toBeInTheDocument();
+    expect(screen.queryByText('Observe-Only')).not.toBeInTheDocument();
+    expect(screen.getByText('Tap below to turn camera off')).toBeInTheDocument();
+  });
+
+  it('displays pending spinner and aria-busy="true" while camera action is pending', () => {
+    render(
+      <ControlCard
+        type="camera"
+        snapshot={cameraOffActionEligible}
+        isConnected={true}
+        isActionPending={true}
+      />
+    );
+
+    const button = screen.getByTestId('camera-action-pending');
     expect(button).toBeDisabled();
+    expect(button).toHaveAttribute('aria-busy', 'true');
+    expect(button).toHaveTextContent('Turning On...');
   });
 
   it('renders State Unknown when camera state is unavailable or unknown', () => {
@@ -82,3 +123,4 @@ describe('Phase 4B Camera Feasibility Spike: ControlCard', () => {
     expect(screen.getByText('Control unavailable in current Teams window')).toBeInTheDocument();
   });
 });
+

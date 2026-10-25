@@ -44,6 +44,9 @@ public class MicrophoneRemoteExecutionTests
 
         public IDisposable? SubscribeCameraStateChanged(Action onStateChangeDetected) => null;
 
+        public Task<CameraCommandResult> SetCameraStateAsync(DesiredCameraState desired, CancellationToken cancellationToken = default) =>
+            throw new NotImplementedException();
+
         public void Dispose() { }
     }
 
@@ -250,24 +253,14 @@ public class MicrophoneRemoteExecutionTests
     }
 
     [Fact]
-    public async Task CameraAndHand_RemainRejectedUnsupportedInPhase4A()
+    public async Task Hand_RemainsRejectedUnsupported()
     {
         var stateStore = new MeetingStateStore();
         var devId = Guid.NewGuid();
         var mockController = new MockTeamsController();
         var processor = new CommandProcessor(stateStore, () => devId, mockController);
 
-        // Camera
-        var camEnv = ProtocolEnvelope.Create(
-            ProtocolMessageType.Command,
-            new CommandPayload { Command = "set_camera", Desired = "on" },
-            devId);
-        var camRes = await processor.ProcessEnvelopeAsync(camEnv);
-        var camPayload = camRes.DeserializePayload<CommandResultPayload>();
-        Assert.Equal("unsupported", camPayload?.Status);
-        Assert.Equal(ProtocolErrorCodes.UnsupportedInPhase4A, camPayload?.ErrorCode);
-
-        // Hand
+        // Hand remains strictly locked in Phase 4C
         var handEnv = ProtocolEnvelope.Create(
             ProtocolMessageType.Command,
             new CommandPayload { Command = "set_hand", Desired = "raised" },

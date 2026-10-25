@@ -6,6 +6,7 @@ import { StatusBanner } from './components/StatusBanner';
 import { ControlCard } from './components/ControlCard';
 import { PairingView } from './components/PairingView';
 import { AwaitingApprovalModal } from './components/AwaitingApprovalModal';
+import { CameraSafetyModal } from './components/CameraSafetyModal';
 import { DiagnosticsDrawer } from './components/DiagnosticsDrawer';
 
 export const App: React.FC = () => {
@@ -14,7 +15,12 @@ export const App: React.FC = () => {
     state,
     echoLog,
     isMicActionPending,
+    isCameraActionPending,
+    showCameraSafetyModal,
     setMicrophoneState,
+    setCameraState,
+    confirmCameraSafety,
+    cancelCameraSafety,
     startPairing,
     unpair,
     testEcho,
@@ -65,6 +71,8 @@ export const App: React.FC = () => {
                 type="camera"
                 snapshot={state.controls.camera}
                 isConnected={state.connection === 'connected'}
+                onCameraAction={setCameraState}
+                isActionPending={isCameraActionPending}
               />
               <ControlCard
                 type="hand"
@@ -83,6 +91,13 @@ export const App: React.FC = () => {
           onCancel={resetPairingState}
         />
       )}
+
+      {/* Camera Safety Confirmation Modal (Phase 4C) */}
+      <CameraSafetyModal
+        isOpen={showCameraSafetyModal}
+        onConfirm={confirmCameraSafety}
+        onCancel={cancelCameraSafety}
+      />
 
       {/* Transport Diagnostics & Inspection Drawer */}
       <DiagnosticsDrawer

@@ -92,6 +92,9 @@ public class PassiveStateSynchronizationTests
         public Task<MicrophoneCommandResult> SetMicrophoneStateAsync(DesiredMicrophoneState desiredState, CancellationToken cancellationToken = default) =>
             throw new NotImplementedException();
 
+        public Task<CameraCommandResult> SetCameraStateAsync(DesiredCameraState desiredState, CancellationToken cancellationToken = default) =>
+            throw new NotImplementedException();
+
         public void Dispose() { }
 
         private class SubscriptionToken : IDisposable

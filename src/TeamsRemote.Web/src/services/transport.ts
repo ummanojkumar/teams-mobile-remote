@@ -239,18 +239,48 @@ export class TransportClient {
   }
 
   /**
-   * Phase 4A Constraint: Camera and Hand control commands are strictly disabled.
-   * This method throws if invoked in Phase 4A.
+   * Phase 4C: Remote Desired-State Camera Control
+   * Dispatches explicit 'on' or 'off' desired-state command with expectedStateRevision.
+   */
+  sendSetCamera(
+    desired: 'on' | 'off',
+    expectedStateRevision: number,
+    messageId?: string,
+    correlationId?: string
+  ): boolean {
+    if (!this.hasValidCredentials()) return false;
+    const msgId = messageId || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'msg_' + Date.now());
+    const corrId = correlationId || msgId;
+
+    const envelope = createEnvelope(
+      'command',
+      {
+        command: 'set_camera',
+        desired,
+        expectedStateRevision,
+      },
+      this.getDeviceId(),
+      corrId,
+      msgId
+    );
+    return this.sendEnvelope(envelope);
+  }
+
+  /**
+   * Phase 4C Constraint: Hand control commands remain strictly disabled.
    */
   sendRemoteControlCommand(command: string): never {
     throw new Error(
-      `Remote Teams control '${command}' is blocked in Phase 4A by UNSUPPORTED_IN_PHASE_4A constraint.`
+      `Remote Teams control '${command}' is blocked in Phase 4C by UNSUPPORTED_IN_PHASE_4A constraint.`
     );
   }
 
   sendCommand(command: string, desired?: string, expectedStateRevision = 0): boolean {
     if (command === 'set_microphone' && (desired === 'muted' || desired === 'unmuted')) {
       return this.sendSetMicrophone(desired, expectedStateRevision);
+    }
+    if (command === 'set_camera' && (desired === 'on' || desired === 'off')) {
+      return this.sendSetCamera(desired, expectedStateRevision);
     }
     return this.sendRemoteControlCommand(command);
   }

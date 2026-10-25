@@ -19,6 +19,18 @@ export function useRemoteTransport() {
   const [isMicActionPending, setIsMicActionPending] = useState(false);
   const micActionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const [isCameraActionPending, setIsCameraActionPending] = useState(false);
+  const cameraActionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [hasConfirmedCameraSafetyThisSession, setHasConfirmedCameraSafetyThisSession] = useState(() => {
+    try {
+      return typeof sessionStorage !== 'undefined' && sessionStorage.getItem('teams_remote_camera_safety_confirmed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [showCameraSafetyModal, setShowCameraSafetyModal] = useState(false);
+
   const handleStatusChange = useCallback((status: RemoteState['connection']) => {
     setState((prev: RemoteState) => ({ ...prev, connection: status }));
   }, []);
@@ -29,6 +41,12 @@ export function useRemoteTransport() {
       micActionTimerRef.current = null;
     }
     setIsMicActionPending(false);
+
+    if (cameraActionTimerRef.current) {
+      clearTimeout(cameraActionTimerRef.current);
+      cameraActionTimerRef.current = null;
+    }
+    setIsCameraActionPending(false);
 
     setState((prev: RemoteState) => ({
       ...prev,
@@ -62,6 +80,12 @@ export function useRemoteTransport() {
     }
     setIsMicActionPending(false);
 
+    if (cameraActionTimerRef.current) {
+      clearTimeout(cameraActionTimerRef.current);
+      cameraActionTimerRef.current = null;
+    }
+    setIsCameraActionPending(false);
+
     if (result.state?.echo) {
       setEchoLog((prev) => [
         {
@@ -76,11 +100,15 @@ export function useRemoteTransport() {
     if (result.status === 'state_uncertain') {
       setState((prev: RemoteState) => ({
         ...prev,
-        errorMessage: result.reason || 'Microphone state uncertain after action.',
+        errorMessage: result.reason || 'Control state uncertain after action.',
         controls: {
           ...prev.controls,
           microphone: {
             ...prev.controls.microphone,
+            confidence: 'stale',
+          },
+          camera: {
+            ...prev.controls.camera,
             confidence: 'stale',
           },
         },
@@ -100,8 +128,10 @@ export function useRemoteTransport() {
       return;
     }
 
-    if (result.state && (result.state.microphone || result.state.meeting || result.state.confidence)) {
+    if (result.state && (result.state.microphone || result.state.camera || result.state.meeting || result.state.confidence || result.state.capability)) {
       const micVal = result.state.microphone as ControlSnapshotItem['value'] | undefined;
+      const camVal = result.state.camera as ControlSnapshotItem['value'] | undefined;
+      const camCap = result.state.capability as ControlSnapshotItem['capability'] | undefined;
       const confVal = result.state.confidence as ControlSnapshotItem['confidence'] | undefined;
       const meetingVal = result.state.meeting;
       const normalizedMeeting: RemoteState['meetingStatus'] =
@@ -122,6 +152,13 @@ export function useRemoteTransport() {
                 capability: 'verified',
               }
             : prev.controls.microphone,
+          camera: camVal
+            ? {
+                value: camVal,
+                confidence: confVal || 'confirmed',
+                capability: camCap || prev.controls.camera.capability,
+              }
+            : prev.controls.camera,
         },
       }));
     } else if (result.stateRevision !== undefined) {
@@ -248,12 +285,6 @@ export function useRemoteTransport() {
     checkOpenAndSend();
   }, []);
 
-  const unpair = useCallback(() => {
-    PairingStorage.clearCredentials();
-    transportRef.current?.disconnect();
-    transportRef.current?.setCredentials(null);
-    setState(INITIAL_REMOTE_STATE);
-  }, []);
 
   const testEcho = useCallback((text = 'Hello from Mobile PWA!') => {
     transportRef.current?.testEcho(text);
@@ -334,15 +365,120 @@ export function useRemoteTransport() {
     ]
   );
 
+  const executeCameraAction = useCallback(
+    (desired: 'on' | 'off') => {
+      if (
+        !transportRef.current ||
+        isCameraActionPending ||
+        state.connection !== 'connected' ||
+        state.controls.camera.confidence !== 'confirmed' ||
+        (state.controls.camera.capability !== 'observe-only' && state.controls.camera.capability !== 'verified')
+      ) {
+        return;
+      }
+
+      setIsCameraActionPending(true);
+
+      // Optimistically mark confidence as pending
+      setState((prev: RemoteState) => ({
+        ...prev,
+        controls: {
+          ...prev.controls,
+          camera: {
+            ...prev.controls.camera,
+            confidence: 'pending',
+          },
+        },
+      }));
+
+      // Bounded safety timeout (5000ms)
+      if (cameraActionTimerRef.current) {
+        clearTimeout(cameraActionTimerRef.current);
+      }
+      cameraActionTimerRef.current = setTimeout(() => {
+        setIsCameraActionPending(false);
+        setState((prev: RemoteState) => ({
+          ...prev,
+          errorMessage: 'Camera action timed out. Re-syncing state...',
+          controls: {
+            ...prev.controls,
+            camera: {
+              ...prev.controls.camera,
+              confidence: 'stale',
+            },
+          },
+        }));
+        transportRef.current?.queryState();
+      }, 5000);
+
+      const messageId =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : 'msg_' + Date.now();
+      transportRef.current.sendSetCamera(
+        desired,
+        state.stateRevision,
+        messageId,
+        messageId
+      );
+    },
+    [
+      isCameraActionPending,
+      state.connection,
+      state.controls.camera,
+      state.stateRevision,
+    ]
+  );
+
+  const setCameraState = useCallback(
+    (desired: 'on' | 'off') => {
+      if (desired === 'on' && !hasConfirmedCameraSafetyThisSession) {
+        setShowCameraSafetyModal(true);
+        return;
+      }
+      executeCameraAction(desired);
+    },
+    [hasConfirmedCameraSafetyThisSession, executeCameraAction]
+  );
+
+  const confirmCameraSafety = useCallback(() => {
+    setHasConfirmedCameraSafetyThisSession(true);
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.setItem('teams_remote_camera_safety_confirmed', 'true');
+      }
+    } catch {
+      // Ignore sessionStorage errors
+    }
+    setShowCameraSafetyModal(false);
+    executeCameraAction('on');
+  }, [executeCameraAction]);
+
+  const cancelCameraSafety = useCallback(() => {
+    setShowCameraSafetyModal(false);
+  }, []);
+
   useEffect(() => {
     return () => {
       if (micActionTimerRef.current) {
         clearTimeout(micActionTimerRef.current);
       }
+      if (cameraActionTimerRef.current) {
+        clearTimeout(cameraActionTimerRef.current);
+      }
     };
   }, []);
 
   const resetPairingState = useCallback(() => {
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.removeItem('teams_remote_camera_safety_confirmed');
+      }
+    } catch {
+      // Ignore
+    }
+    setHasConfirmedCameraSafetyThisSession(false);
+    setShowCameraSafetyModal(false);
     PairingStorage.clearCredentials();
     transportRef.current?.setCredentials(null);
     transportRef.current?.disconnect();
@@ -354,11 +490,29 @@ export function useRemoteTransport() {
     }));
   }, []);
 
+  const unpair = useCallback(() => {
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.removeItem('teams_remote_camera_safety_confirmed');
+      }
+    } catch {
+      // Ignore
+    }
+    setHasConfirmedCameraSafetyThisSession(false);
+    setShowCameraSafetyModal(false);
+    resetPairingState();
+  }, [resetPairingState]);
+
   return {
     state,
     echoLog,
     isMicActionPending,
+    isCameraActionPending,
+    showCameraSafetyModal,
     setMicrophoneState,
+    setCameraState,
+    confirmCameraSafety,
+    cancelCameraSafety,
     startPairing,
     unpair,
     testEcho,

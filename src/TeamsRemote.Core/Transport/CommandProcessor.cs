@@ -296,13 +296,173 @@ public sealed class CommandProcessor
                 break;
 
             case "set_camera":
+                var targetCameraDesired = cmdPayload.Desired?.Trim().ToLowerInvariant();
+                if (!DesiredCameraStateExtensions.TryParseWire(targetCameraDesired, out var desiredCamEnum))
+                {
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "rejected",
+                        StateRevision = _stateStore.StateRevision,
+                        ErrorCode = ProtocolErrorCodes.InvalidDesiredState,
+                        Reason = $"Invalid desired state '{cmdPayload.Desired}'. Expected 'on' or 'off'."
+                    };
+                    break;
+                }
+
+                var (camRev, curMicForCam, _, curCamState, curCamCap, _, curMeetingForCam) = _stateStore.GetFullSnapshot();
+
+                // Safe exception: If refreshed camera state already equals requested desired state,
+                // return AlreadyInDesiredState without invoking Teams.
+                if (string.Equals(curCamState, targetCameraDesired, StringComparison.OrdinalIgnoreCase))
+                {
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "confirmed",
+                        StateRevision = camRev,
+                        Reason = $"Camera is already {targetCameraDesired}. No action needed.",
+                        State = new Dictionary<string, string>
+                        {
+                            ["camera"] = curCamState,
+                            ["confidence"] = StateConfidence.Confirmed.ToString().ToLowerInvariant(),
+                            ["capability"] = curCamCap.ToWireString(),
+                            ["meeting"] = curMeetingForCam
+                        }
+                    };
+                    break;
+                }
+
+                // Strict revision rule:
+                // - If lower than current: reject with STALE_COMMAND
+                if (cmdPayload.ExpectedStateRevision.HasValue && cmdPayload.ExpectedStateRevision.Value < camRev)
+                {
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "rejected",
+                        StateRevision = camRev,
+                        ErrorCode = ProtocolErrorCodes.StaleCommand,
+                        Reason = $"Command rejected: expected state revision {cmdPayload.ExpectedStateRevision.Value} is lower than current revision {camRev}."
+                    };
+                    break;
+                }
+
+                // - If higher than current: reject with INVALID_STATE_REVISION
+                if (cmdPayload.ExpectedStateRevision.HasValue && cmdPayload.ExpectedStateRevision.Value > camRev)
+                {
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "rejected",
+                        StateRevision = camRev,
+                        ErrorCode = ProtocolErrorCodes.InvalidStateRevision,
+                        Reason = $"Command rejected: expected state revision {cmdPayload.ExpectedStateRevision.Value} is higher than current revision {camRev}."
+                    };
+                    break;
+                }
+
+                // Exact match (or no revision specified): proceed with UIA execution
+                if (_teamsController == null)
+                {
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "unsupported",
+                        StateRevision = camRev,
+                        ErrorCode = ProtocolErrorCodes.UnsupportedInPhase4A,
+                        Reason = "No Teams controller available to execute remote camera command."
+                    };
+                    break;
+                }
+
+                _stateStore.MarkCameraPending();
+
+                try
+                {
+                    var actionResult = await _teamsController.SetCameraStateAsync(desiredCamEnum, cancellationToken);
+                    switch (actionResult.Status)
+                    {
+                        case CommandExecutionStatus.Confirmed:
+                        case CommandExecutionStatus.AlreadyInDesiredState:
+                            var finalCap = actionResult.PromoteToVerified
+                                ? ControlCapabilityTier.Verified
+                                : curCamCap;
+
+                            _stateStore.UpdateObserved(
+                                curMicForCam,
+                                actionResult.FinalState,
+                                isConfirmed: true,
+                                meetingStatus: "active",
+                                cameraCapability: finalCap,
+                                cameraConfidence: StateConfidence.Confirmed);
+
+                            var (newCamRev, _, _, newCamState, newCamCap, newCamConf, newCamMeeting) = _stateStore.GetFullSnapshot();
+                            execResult = new CommandResultPayload
+                            {
+                                Status = "confirmed",
+                                StateRevision = newCamRev,
+                                Reason = actionResult.Reason,
+                                State = new Dictionary<string, string>
+                                {
+                                    ["camera"] = newCamState,
+                                    ["confidence"] = newCamConf.ToString().ToLowerInvariant(),
+                                    ["capability"] = newCamCap.ToWireString(),
+                                    ["meeting"] = newCamMeeting
+                                }
+                            };
+                            break;
+
+                        case CommandExecutionStatus.TimedOut:
+                        case CommandExecutionStatus.StateUncertain:
+                            _stateStore.MarkCameraStaleOrUncertain();
+                            execResult = new CommandResultPayload
+                            {
+                                Status = "state_uncertain",
+                                StateRevision = _stateStore.StateRevision,
+                                ErrorCode = ProtocolErrorCodes.VerificationTimedOut,
+                                Reason = actionResult.Reason
+                            };
+                            break;
+
+                        case CommandExecutionStatus.Unsupported:
+                            _stateStore.MarkCameraStaleOrUncertain();
+                            execResult = new CommandResultPayload
+                            {
+                                Status = "unsupported",
+                                StateRevision = _stateStore.StateRevision,
+                                ErrorCode = actionResult.ErrorCode ?? ProtocolErrorCodes.ControlNotFound,
+                                Reason = actionResult.Reason
+                            };
+                            break;
+
+                        default:
+                            _stateStore.MarkCameraStaleOrUncertain();
+                            execResult = new CommandResultPayload
+                            {
+                                Status = "failed",
+                                StateRevision = _stateStore.StateRevision,
+                                ErrorCode = actionResult.ErrorCode ?? ProtocolErrorCodes.InvokeFailed,
+                                Reason = actionResult.Reason
+                            };
+                            break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _stateStore.MarkCameraStaleOrUncertain();
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "failed",
+                        StateRevision = _stateStore.StateRevision,
+                        ErrorCode = ProtocolErrorCodes.InvokeFailed,
+                        Reason = ex.Message
+                    };
+                }
+                break;
+
             case "set_hand":
                 execResult = new CommandResultPayload
                 {
                     Status = "unsupported",
                     StateRevision = _stateStore.StateRevision,
                     ErrorCode = ProtocolErrorCodes.UnsupportedInPhase4A,
-                    Reason = $"Remote control of '{cmdPayload.Command}' is locked in Phase 4A."
+                    Reason = $"Remote control of '{cmdPayload.Command}' is locked in Phase 4C."
                 };
                 break;
 

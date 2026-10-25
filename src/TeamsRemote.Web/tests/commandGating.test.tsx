@@ -4,37 +4,32 @@ import { ControlCard } from '../src/components/ControlCard';
 import { TransportClient } from '../src/services/transport';
 import { ProtocolErrorCodes } from '../src/types';
 
-describe('Strict Phase 4A Command Gating', () => {
-  const dummySnapshot = {
-    value: 'muted' as const,
-    capability: 'verified' as const,
-    confidence: 'confirmed' as const,
+describe('Strict Hand Command Gating (Phase 4C)', () => {
+  const dummyHandSnapshot = {
+    value: 'lowered' as const,
+    capability: 'unavailable' as const,
+    confidence: 'unknown' as const,
   };
 
-  it('renders "Not enabled yet" badge and button label on Camera and Hand control cards', () => {
-    const { unmount } = render(<ControlCard type="camera" snapshot={dummySnapshot} isConnected={true} />);
-    expect(screen.getByText('Not enabled yet')).toBeInTheDocument();
-    expect(screen.getByText('Not enabled yet (Phase 4B/C)')).toBeInTheDocument();
-    unmount();
-
-    render(<ControlCard type="hand" snapshot={dummySnapshot} isConnected={true} />);
+  it('renders "Not enabled yet" badge and button label on Hand control card', () => {
+    render(<ControlCard type="hand" snapshot={dummyHandSnapshot} isConnected={true} />);
     expect(screen.getByText('Not enabled yet')).toBeInTheDocument();
     expect(screen.getByText('Not enabled yet (Phase 4B/C)')).toBeInTheDocument();
   });
 
-  it('ensures camera and hand control buttons have disabled and aria-disabled="true" attributes', () => {
-    render(<ControlCard type="hand" snapshot={dummySnapshot} isConnected={true} />);
+  it('ensures hand control button has disabled and aria-disabled="true" attributes', () => {
+    render(<ControlCard type="hand" snapshot={dummyHandSnapshot} isConnected={true} />);
     const button = screen.getByRole('button', { name: /Not enabled yet/i });
 
     expect(button).toBeDisabled();
     expect(button).toHaveAttribute('aria-disabled', 'true');
   });
 
-  it('clicking disabled camera or hand control button causes no action or event dispatch', () => {
+  it('clicking disabled hand control button causes no action or event dispatch', () => {
     const clickSpy = vi.fn();
     render(
       <div onClick={clickSpy}>
-        <ControlCard type="camera" snapshot={dummySnapshot} isConnected={true} />
+        <ControlCard type="hand" snapshot={dummyHandSnapshot} isConnected={true} />
       </div>
     );
 
@@ -55,7 +50,7 @@ describe('Strict Phase 4A Command Gating', () => {
     expect(screen.getByRole('button', { name: /Unavailable/i })).toBeDisabled();
   });
 
-  it('transport client explicitly blocks camera and hand remote control commands with UNSUPPORTED_IN_PHASE_4A', () => {
+  it('transport client explicitly blocks hand remote control commands with UNSUPPORTED_IN_PHASE_4A', () => {
     const transport = new TransportClient({
       onStatusChange: vi.fn(),
       onStateSnapshot: vi.fn(),
@@ -65,13 +60,10 @@ describe('Strict Phase 4A Command Gating', () => {
       onError: vi.fn(),
     });
 
-    expect(() => transport.sendCommand('set_camera', 'off')).toThrow(
-      ProtocolErrorCodes.UnsupportedInPhase4A
-    );
-
     expect(() => transport.sendCommand('set_hand', 'lowered')).toThrow(
       ProtocolErrorCodes.UnsupportedInPhase4A
     );
   });
 });
+
 

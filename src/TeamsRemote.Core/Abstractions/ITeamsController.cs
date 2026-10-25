@@ -29,6 +29,15 @@ public interface ITeamsController : IDisposable
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Executes an explicit desired-state transition for the camera (on/off).
+    /// Pre-action state is checked, action is invoked only if needed, and the outcome
+    /// is verified via UIA event or bounded re-query before returning confirmed.
+    /// </summary>
+    Task<CameraCommandResult> SetCameraStateAsync(
+        DesiredCameraState desiredState,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Subscribes to microphone state-change events on the active meeting control.
     /// Invokes onStateChangeDetected when a UIA property change (e.g. Name or ToggleState) is raised.
     /// Returns an IDisposable that unregisters the UIA event handlers, or null if subscription failed.

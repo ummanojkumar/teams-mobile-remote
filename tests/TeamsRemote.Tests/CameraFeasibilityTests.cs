@@ -91,6 +91,9 @@ public class CameraFeasibilityTests
         public Task<MicrophoneCommandResult> SetMicrophoneStateAsync(DesiredMicrophoneState desiredState, CancellationToken cancellationToken = default) =>
             throw new NotImplementedException();
 
+        public Task<CameraCommandResult> SetCameraStateAsync(DesiredCameraState desiredState, CancellationToken cancellationToken = default) =>
+            throw new NotImplementedException();
+
         public void Dispose() { }
 
         private class SubscriptionToken : IDisposable
@@ -325,24 +328,23 @@ public class CameraFeasibilityTests
     }
 
     [Fact]
-    public async Task CommandProcessor_CameraCommand_StrictlyRejectedInPhase4B()
+    public async Task CommandProcessor_HandCommand_StrictlyRejectedInPhase4C()
     {
         var stateStore = new MeetingStateStore();
         var devId = Guid.NewGuid();
         var controller = new CameraTestTeamsController();
         var processor = new CommandProcessor(stateStore, () => devId, controller);
 
-        var cameraCmdEnv = ProtocolEnvelope.Create(
+        var handCmdEnv = ProtocolEnvelope.Create(
             ProtocolMessageType.Command,
             new CommandPayload
             {
-                Command = "set_camera",
-                Desired = "on",
-                ExpectedStateRevision = 1
+                Command = "set_hand",
+                Desired = "raised"
             },
             devId);
 
-        var responseEnv = await processor.ProcessEnvelopeAsync(cameraCmdEnv);
+        var responseEnv = await processor.ProcessEnvelopeAsync(handCmdEnv);
         Assert.NotNull(responseEnv);
         Assert.Equal(ProtocolMessageType.CommandResult, responseEnv.Type);
 

@@ -20,6 +20,7 @@ interface ControlCardProps {
   snapshot: ControlSnapshotItem;
   isConnected: boolean;
   onAction?: (desired: 'muted' | 'unmuted') => void;
+  onCameraAction?: (desired: 'on' | 'off') => void;
   isActionPending?: boolean;
 }
 
@@ -28,11 +29,14 @@ export const ControlCard: React.FC<ControlCardProps> = ({
   snapshot,
   isConnected,
   onAction,
+  onCameraAction,
   isActionPending = false,
 }) => {
   const { value, confidence, capability } = snapshot;
 
   const isMic = type === 'microphone';
+  const isCamera = type === 'camera';
+
   const isMicActionable =
     isMic &&
     isConnected &&
@@ -40,7 +44,14 @@ export const ControlCard: React.FC<ControlCardProps> = ({
     confidence === 'confirmed' &&
     (value === 'muted' || value === 'unmuted');
 
-  const isPending = isMic && isActionPending;
+  const isCameraActionable =
+    isCamera &&
+    isConnected &&
+    (capability === 'observe-only' || capability === 'verified') &&
+    confidence === 'confirmed' &&
+    (value === 'on' || value === 'off');
+
+  const isPending = (isMic || isCamera) && isActionPending;
 
   // Determine state labels and icons
   let title = '';
@@ -69,7 +80,7 @@ export const ControlCard: React.FC<ControlCardProps> = ({
       IconComponent = confidence === 'stale' ? AlertTriangle : confidence === 'pending' ? Loader2 : HelpCircle;
       stateThemeClass = confidence === 'stale' ? 'theme-stale' : 'theme-unknown';
     }
-  } else if (type === 'camera') {
+  } else if (isCamera) {
     title = 'Camera';
     if (confidence === 'confirmed') {
       if (value === 'on') {
@@ -86,8 +97,8 @@ export const ControlCard: React.FC<ControlCardProps> = ({
         stateThemeClass = 'theme-unknown';
       }
     } else {
-      valueLabel = confidence === 'stale' ? 'State Stale' : 'State Unknown';
-      IconComponent = confidence === 'stale' ? AlertTriangle : HelpCircle;
+      valueLabel = confidence === 'stale' ? 'State Stale' : confidence === 'pending' ? 'Command In Progress...' : 'State Unknown';
+      IconComponent = confidence === 'stale' ? AlertTriangle : confidence === 'pending' ? Loader2 : HelpCircle;
       stateThemeClass = confidence === 'stale' ? 'theme-stale' : 'theme-unknown';
     }
   } else if (type === 'hand') {
@@ -124,17 +135,27 @@ export const ControlCard: React.FC<ControlCardProps> = ({
   } else if (!isConnected) {
     subtext = 'Disconnected from relay';
   } else if (isPending) {
-    subtext = value === 'muted' ? 'Sending unmute command to Teams...' : 'Sending mute command to Teams...';
+    if (isMic) {
+      subtext = value === 'muted' ? 'Sending unmute command to Teams...' : 'Sending mute command to Teams...';
+    } else {
+      subtext = value === 'off' ? 'Sending camera-on command to Teams...' : 'Sending camera-off command to Teams...';
+    }
   } else if (confidence === 'stale') {
     subtext = 'State observation is stale — please refresh';
   } else if (isMicActionable) {
     subtext = value === 'muted' ? 'Tap below to unmute microphone' : 'Tap below to mute microphone';
+  } else if (isCameraActionable) {
+    if (capability === 'verified') {
+      subtext = value === 'off' ? 'Tap below to turn camera on' : 'Tap below to turn camera off';
+    } else {
+      subtext = value === 'off'
+        ? 'Camera action-eligible — tap to turn on and verify control'
+        : 'Camera action-eligible — tap to turn off and verify control';
+    }
   } else if (isMic) {
     subtext = 'Microphone control waiting for verified Teams meeting state';
-  } else if (type === 'camera') {
-    subtext = capability === 'observe-only'
-      ? 'Camera observation active (Phase 4B spike) — control disabled'
-      : 'Camera control unavailable in current Teams window';
+  } else if (isCamera) {
+    subtext = 'Camera control waiting for confirmed Teams meeting state';
   } else {
     subtext = 'Remote control disabled';
   }
@@ -155,13 +176,13 @@ export const ControlCard: React.FC<ControlCardProps> = ({
         </div>
 
         {/* Phase / Capability Badge */}
-        {isMic && capability === 'verified' ? (
-          <div className="active-verified-badge" title="Remote microphone control active">
+        {((isMic && capability === 'verified') || (isCamera && capability === 'verified')) ? (
+          <div className="active-verified-badge" title="Remote control active & verified">
             <CheckCircle size={12} />
             <span>Remote Active</span>
           </div>
-        ) : type === 'camera' && capability === 'observe-only' ? (
-          <div className="phase-observe-badge" title="Camera capability: observe-only (Phase 4B spike)">
+        ) : isCamera && capability === 'observe-only' ? (
+          <div className="phase-observe-badge" title="Camera capability: observe-only (action-eligible)">
             <Lock size={12} />
             <span>Observe-Only</span>
           </div>
@@ -184,7 +205,7 @@ export const ControlCard: React.FC<ControlCardProps> = ({
         </div>
       </div>
 
-      {/* Action Button: Interactive for Microphone in Phase 4A, Locked for Camera & Hand */}
+      {/* Action Button: Interactive for Microphone in Phase 4A & Camera in Phase 4C */}
       {isMic ? (
         isPending ? (
           <button
@@ -240,6 +261,61 @@ export const ControlCard: React.FC<ControlCardProps> = ({
             </span>
           </button>
         )
+      ) : isCamera ? (
+        isPending ? (
+          <button
+            type="button"
+            disabled={true}
+            aria-disabled="true"
+            aria-busy="true"
+            className="card-action-btn pending-btn touch-target"
+            data-testid="camera-action-pending"
+          >
+            <Loader2 size={18} className="spin-icon" />
+            <span>{value === 'off' ? 'Turning On...' : 'Turning Off...'}</span>
+          </button>
+        ) : isCameraActionable ? (
+          value === 'off' ? (
+            <button
+              type="button"
+              className="card-action-btn action-unmute touch-target"
+              data-testid="camera-action-on"
+              onClick={() => onCameraAction?.('on')}
+            >
+              <Video size={18} />
+              <span>Turn Camera On</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="card-action-btn action-mute touch-target"
+              data-testid="camera-action-off"
+              onClick={() => onCameraAction?.('off')}
+            >
+              <VideoOff size={18} />
+              <span>Turn Camera Off</span>
+            </button>
+          )
+        ) : (
+          <button
+            type="button"
+            disabled={true}
+            aria-disabled="true"
+            className="card-action-btn disabled-btn touch-target"
+            data-testid="camera-action-disabled"
+          >
+            <Lock size={14} />
+            <span>
+              {!isConnected
+                ? 'Disconnected'
+                : capability === 'unavailable'
+                ? 'Unavailable'
+                : confidence === 'stale'
+                ? 'State Stale (Refresh)'
+                : 'Control Unavailable'}
+            </span>
+          </button>
+        )
       ) : (
         <button
           type="button"
@@ -249,7 +325,6 @@ export const ControlCard: React.FC<ControlCardProps> = ({
           data-testid={`${type}-action-locked`}
           onClick={(e) => {
             e.preventDefault();
-            // Locked in Phase 4A
           }}
         >
           <Lock size={14} />

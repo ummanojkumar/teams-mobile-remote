@@ -108,6 +108,17 @@ public sealed class MeetingStateStore
         StateChanged?.Invoke();
     }
 
+    public void MarkCameraPending()
+    {
+        lock (_lock)
+        {
+            CameraConfidence = StateConfidence.Pending;
+            LastObservedAt = DateTimeOffset.UtcNow;
+        }
+
+        StateChanged?.Invoke();
+    }
+
     public void MarkStaleOrUncertain()
     {
         lock (_lock)
@@ -117,6 +128,40 @@ public sealed class MeetingStateStore
         }
 
         StateChanged?.Invoke();
+    }
+
+    public void MarkCameraStaleOrUncertain()
+    {
+        lock (_lock)
+        {
+            CameraConfidence = StateConfidence.Stale;
+            CameraCapability = ControlCapabilityTier.ObserveOnly;
+            LastObservedAt = DateTimeOffset.UtcNow;
+        }
+
+        StateChanged?.Invoke();
+    }
+
+    public bool ResetCameraCapabilityToObserveOnly()
+    {
+        bool changed = false;
+        lock (_lock)
+        {
+            if (CameraCapability == ControlCapabilityTier.Verified)
+            {
+                CameraCapability = ControlCapabilityTier.ObserveOnly;
+                StateRevision++;
+                LastObservedAt = DateTimeOffset.UtcNow;
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            StateChanged?.Invoke();
+        }
+
+        return changed;
     }
 
     public void Reset()

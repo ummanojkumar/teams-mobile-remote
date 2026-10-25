@@ -180,10 +180,10 @@ public sealed class TeamsPassiveStateObserver : IDisposable
                 ? camera.ReadableState
                 : TeamsControlState.Unknown;
 
-            // Phase 4B Rule: Camera capability strictly remains ObserveOnly when readable (never Verified in 4B).
-            // Confidence is Confirmed when observed state is trustworthy.
+            // Phase 4C Rule: If camera was already verified for this active meeting surface, preserve Verified.
+            // If the meeting was re-resolved, window closed, or verification failed, it resets back to ObserveOnly.
             ControlCapabilityTier cameraCap = (cameraState != TeamsControlState.Unknown)
-                ? ControlCapabilityTier.ObserveOnly
+                ? (_stateStore.CameraCapability == ControlCapabilityTier.Verified ? ControlCapabilityTier.Verified : ControlCapabilityTier.ObserveOnly)
                 : ControlCapabilityTier.Unavailable;
 
             StateConfidence cameraConf = (cameraState != TeamsControlState.Unknown)
@@ -294,6 +294,9 @@ public sealed class TeamsPassiveStateObserver : IDisposable
                     _currentCameraSubscription = null;
                 }
             }
+
+            // Phase 4C Rule: Reset verified capability to observe-only whenever controls/subscriptions are re-resolved
+            _stateStore.ResetCameraCapabilityToObserveOnly();
         }
     }
 
