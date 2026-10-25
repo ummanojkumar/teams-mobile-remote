@@ -41,7 +41,7 @@ public sealed class TeamsPassiveStateObserver : IDisposable
         _teamsController = teamsController ?? throw new ArgumentNullException(nameof(teamsController));
         _stateStore = stateStore ?? throw new ArgumentNullException(nameof(stateStore));
         _isEnabledFunc = isEnabledFunc;
-        _pollingInterval = pollingInterval ?? TimeSpan.FromMilliseconds(1500);
+        _pollingInterval = pollingInterval ?? TimeSpan.FromSeconds(2);
         _debounceDuration = debounceDuration ?? TimeSpan.FromMilliseconds(150);
     }
 

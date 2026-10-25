@@ -60,7 +60,7 @@ public sealed class CompanionMainForm : Form
             _controller,
             _stateStore,
             () => _pairingService.ActiveDeviceId != null,
-            pollingInterval: TimeSpan.FromMilliseconds(1500),
+            pollingInterval: TimeSpan.FromSeconds(2),
             debounceDuration: TimeSpan.FromMilliseconds(150));
 
         // Tray menu and icon
