@@ -89,9 +89,10 @@ export function useRemoteTransport() {
       transportRef.current?.queryState();
     } else {
       PairingStorage.clearCredentials();
+      const isExpired = response.reason?.toLowerCase().includes('expired');
       setState((prev: RemoteState) => ({
         ...prev,
-        pairing: 'rejected',
+        pairing: isExpired ? 'expired' : 'rejected',
         errorMessage: response.reason || 'Pairing was declined on the companion.',
       }));
     }
@@ -196,6 +197,9 @@ export function useRemoteTransport() {
   }, []);
 
   const resetPairingState = useCallback(() => {
+    PairingStorage.clearCredentials();
+    transportRef.current?.setCredentials(null);
+    transportRef.current?.disconnect();
     setState((prev: RemoteState) => ({
       ...prev,
       pairing: 'unpaired',

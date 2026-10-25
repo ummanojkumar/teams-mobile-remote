@@ -43,6 +43,15 @@ export class TransportClient {
     this.credentials = creds;
   }
 
+  hasValidCredentials(): boolean {
+    return !!(
+      this.credentials &&
+      this.credentials.deviceId &&
+      this.credentials.deviceId !== '00000000-0000-0000-0000-000000000000' &&
+      this.credentials.sessionToken
+    );
+  }
+
   connect(relayUrl: string): void {
     this.isDisposed = false;
     this.cleanupSocket();
@@ -69,8 +78,8 @@ export class TransportClient {
       this.setStatus('connected');
       this.startHeartbeat();
 
-      // Immediately query current state snapshot upon connect or reconnect
-      if (this.credentials?.deviceId) {
+      // Immediately query current state snapshot upon connect or reconnect ONLY if already paired
+      if (this.hasValidCredentials()) {
         this.queryState();
       }
     };
@@ -129,9 +138,11 @@ export class TransportClient {
       case 'command_result': {
         const result = envelope.payload as CommandResultPayload;
         if (result.errorCode === ProtocolErrorCodes.PairingRequired) {
-          // Device has been revoked or session terminated
-          this.events.onRevoked?.(result.reason || 'Device pairing has been revoked by the companion.');
-          this.disconnect();
+          // Only treat as revocation if this client previously held valid paired credentials
+          if (this.hasValidCredentials()) {
+            this.events.onRevoked?.(result.reason || 'Device pairing has been revoked by the companion.');
+            this.disconnect();
+          }
           return;
         }
         this.events.onCommandResult?.(result, envelope.correlationId);
@@ -140,11 +151,7 @@ export class TransportClient {
 
       case 'pair_response': {
         const pairResp = envelope.payload as PairApprovePayload;
-        if (!pairResp.approved) {
-          this.events.onRevoked?.(pairResp.reason || 'Pairing was declined or expired.');
-        } else {
-          this.events.onPairResponse?.(pairResp);
-        }
+        this.events.onPairResponse?.(pairResp);
         break;
       }
     }
@@ -226,7 +233,7 @@ export class TransportClient {
   private startHeartbeat(): void {
     this.stopHeartbeat();
     this.heartbeatInterval = setInterval(() => {
-      if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      if (this.socket && this.socket.readyState === WebSocket.OPEN && this.hasValidCredentials()) {
         this.sendEnvelope(createEnvelope('ping', {}, this.getDeviceId()));
       }
     }, 15000);
