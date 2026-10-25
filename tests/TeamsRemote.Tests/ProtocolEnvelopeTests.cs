@@ -112,4 +112,52 @@ public class ProtocolEnvelopeTests
         Assert.False(success);
         Assert.Equal("MALFORMED_JSON", errorCode);
     }
+
+    [Fact]
+    public void TryDeserialize_WhenNonGuidStringId_DoesNotThrowAndDeserializesDeterministicGuid()
+    {
+        string json = """
+        {
+            "version": 1,
+            "type": "command",
+            "messageId": "msg_1729838402948",
+            "correlationId": "corr_1729838402948",
+            "deviceId": "00000000-0000-0000-0000-000000000000",
+            "sentAt": "2026-10-25T12:00:00Z",
+            "payload": { "command": "set_microphone", "desired": "unmuted" }
+        }
+        """;
+
+        var (success, envelope, errorCode, reason) = ProtocolEnvelope.TryDeserialize(json);
+
+        Assert.True(success, reason);
+        Assert.NotNull(envelope);
+        Assert.NotEqual(Guid.Empty, envelope.MessageId);
+        Assert.NotEqual(Guid.Empty, envelope.CorrelationId);
+    }
+
+    [Fact]
+    public void TryDeserialize_WhenStandardGuidString_DeserializesExactGuid()
+    {
+        var expectedMsgId = Guid.NewGuid();
+        string json = $$"""
+        {
+            "version": 1,
+            "type": "command",
+            "messageId": "{{expectedMsgId}}",
+            "correlationId": "{{expectedMsgId}}",
+            "deviceId": "00000000-0000-0000-0000-000000000000",
+            "sentAt": "2026-10-25T12:00:00Z",
+            "payload": {}
+        }
+        """;
+
+        var (success, envelope, errorCode, reason) = ProtocolEnvelope.TryDeserialize(json);
+
+        Assert.True(success);
+        Assert.NotNull(envelope);
+        Assert.Equal(expectedMsgId, envelope.MessageId);
+        Assert.Equal(expectedMsgId, envelope.CorrelationId);
+    }
 }
+

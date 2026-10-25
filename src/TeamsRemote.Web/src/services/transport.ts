@@ -10,6 +10,7 @@ import {
   type PairApprovePayload,
   type ConnectionStatus,
   type PairedCredentials,
+  generateUuid,
 } from '../types';
 import { normalizeRelayUrl } from './pairing';
 
@@ -221,7 +222,7 @@ export class TransportClient {
     correlationId?: string
   ): boolean {
     if (!this.hasValidCredentials()) return false;
-    const msgId = messageId || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'msg_' + Date.now());
+    const msgId = messageId || generateUuid();
     const corrId = correlationId || msgId;
 
     const envelope = createEnvelope(
@@ -249,7 +250,7 @@ export class TransportClient {
     correlationId?: string
   ): boolean {
     if (!this.hasValidCredentials()) return false;
-    const msgId = messageId || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'msg_' + Date.now());
+    const msgId = messageId || generateUuid();
     const corrId = correlationId || msgId;
 
     const envelope = createEnvelope(
@@ -277,7 +278,7 @@ export class TransportClient {
     correlationId?: string
   ): boolean {
     if (!this.hasValidCredentials()) return false;
-    const msgId = messageId || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'msg_' + Date.now());
+    const msgId = messageId || generateUuid();
     const corrId = correlationId || msgId;
 
     const envelope = createEnvelope(

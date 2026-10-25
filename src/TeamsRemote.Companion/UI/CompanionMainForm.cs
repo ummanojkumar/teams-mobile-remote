@@ -364,7 +364,9 @@ public sealed class CompanionMainForm : Form
     {
         try
         {
-            string clientRelayUrl = _relayUri.ToString().Replace("/ws/companion", "/ws/client");
+            string clientRelayUrl = Environment.GetEnvironmentVariable("TEAMS_REMOTE_CLIENT_RELAY_URL")?.Trim() is { Length: > 0 } explicitUrl
+                ? explicitUrl
+                : _relayUri.ToString().Replace("/ws/companion", "/ws/client");
             var challenge = _pairingService.CreateSingleUseChallenge(clientRelayUrl);
 
             // Register ephemeral challenge with relay
@@ -391,6 +393,7 @@ public sealed class CompanionMainForm : Form
 
             LogMessage($"Generated single-use pairing challenge ({challenge.ShortCode}). Expires in 60s.");
             LogMessage($"[PAIRING] Challenge ID: {challenge.ChallengeId}");
+            LogMessage($"[PAIRING] Client Relay URL: {clientRelayUrl}");
 
             using var qrDialog = new PairingQrDialog(qrBitmap, challenge.ShortCode, qrPayload);
             qrDialog.ShowDialog(this);

@@ -5,6 +5,7 @@ namespace TeamsRemote.Core.Protocol;
 public record PairChallengePayload
 {
     [JsonPropertyName("challengeId")]
+    [JsonConverter(typeof(LenientGuidConverter))]
     public Guid ChallengeId { get; init; } = Guid.NewGuid();
 
     [JsonPropertyName("relayUrl")]
@@ -23,6 +24,7 @@ public record PairChallengePayload
 public record PairRequestPayload
 {
     [JsonPropertyName("challengeId")]
+    [JsonConverter(typeof(LenientGuidConverter))]
     public Guid ChallengeId { get; init; }
 
     [JsonPropertyName("deviceLabel")]
@@ -35,6 +37,7 @@ public record PairRequestPayload
 public record PairApprovePayload
 {
     [JsonPropertyName("challengeId")]
+    [JsonConverter(typeof(LenientGuidConverter))]
     public Guid ChallengeId { get; init; }
 
     [JsonPropertyName("approved")]
@@ -44,12 +47,14 @@ public record PairApprovePayload
     public string? SessionToken { get; init; }
 
     [JsonPropertyName("deviceId")]
+    [JsonConverter(typeof(LenientGuidConverter))]
     public Guid DeviceId { get; init; }
 }
 
 public record RevokePayload
 {
     [JsonPropertyName("deviceId")]
+    [JsonConverter(typeof(LenientGuidConverter))]
     public Guid DeviceId { get; init; }
 
     [JsonPropertyName("reason")]

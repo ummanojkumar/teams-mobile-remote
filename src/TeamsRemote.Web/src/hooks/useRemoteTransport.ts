@@ -4,6 +4,7 @@ import { TransportClient } from '../services/transport';
 import {
   type CommandResultPayload,
   type ControlSnapshotItem,
+  generateUuid,
   INITIAL_REMOTE_STATE,
   type PairedCredentials,
   type PairApprovePayload,
@@ -24,6 +25,10 @@ export function useRemoteTransport() {
 
   const [isHandActionPending, setIsHandActionPending] = useState(false);
   const handActionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const pairingConnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pairingApprovalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pairingPollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [hasConfirmedCameraSafetyThisSession, setHasConfirmedCameraSafetyThisSession] = useState(() => {
     try {
@@ -207,6 +212,19 @@ export function useRemoteTransport() {
   }, []);
 
   const handlePairResponse = useCallback((response: PairApprovePayload) => {
+    if (pairingConnectTimerRef.current) {
+      clearTimeout(pairingConnectTimerRef.current);
+      pairingConnectTimerRef.current = null;
+    }
+    if (pairingApprovalTimerRef.current) {
+      clearTimeout(pairingApprovalTimerRef.current);
+      pairingApprovalTimerRef.current = null;
+    }
+    if (pairingPollTimerRef.current) {
+      clearTimeout(pairingPollTimerRef.current);
+      pairingPollTimerRef.current = null;
+    }
+
     if (response.approved && response.deviceId) {
       const creds: PairedCredentials = {
         deviceId: response.deviceId,
@@ -249,7 +267,28 @@ export function useRemoteTransport() {
   }, []);
 
   const handleError = useCallback((error: string) => {
-    setState((prev: RemoteState) => ({ ...prev, errorMessage: error }));
+    setState((prev: RemoteState) => {
+      if (prev.pairing === 'awaiting_approval') {
+        if (pairingConnectTimerRef.current) {
+          clearTimeout(pairingConnectTimerRef.current);
+          pairingConnectTimerRef.current = null;
+        }
+        if (pairingApprovalTimerRef.current) {
+          clearTimeout(pairingApprovalTimerRef.current);
+          pairingApprovalTimerRef.current = null;
+        }
+        if (pairingPollTimerRef.current) {
+          clearTimeout(pairingPollTimerRef.current);
+          pairingPollTimerRef.current = null;
+        }
+        return {
+          ...prev,
+          pairing: 'unpaired',
+          errorMessage: `Cannot reach relay server: ${error}. Ensure phone and laptop are on the same Wi-Fi network and firewall allows port access.`,
+        };
+      }
+      return { ...prev, errorMessage: error };
+    });
   }, []);
 
   // Initialize transport client once
@@ -288,6 +327,19 @@ export function useRemoteTransport() {
   const startPairing = useCallback((challenge: ParsedChallenge) => {
     if (!transportRef.current) return;
 
+    if (pairingConnectTimerRef.current) {
+      clearTimeout(pairingConnectTimerRef.current);
+      pairingConnectTimerRef.current = null;
+    }
+    if (pairingApprovalTimerRef.current) {
+      clearTimeout(pairingApprovalTimerRef.current);
+      pairingApprovalTimerRef.current = null;
+    }
+    if (pairingPollTimerRef.current) {
+      clearTimeout(pairingPollTimerRef.current);
+      pairingPollTimerRef.current = null;
+    }
+
     setState((prev: RemoteState) => ({
       ...prev,
       pairing: 'awaiting_approval',
@@ -309,13 +361,50 @@ export function useRemoteTransport() {
 
     // Send pair request
     const deviceLabel = `Mobile PWA (${typeof navigator !== 'undefined' ? navigator.platform || 'Device' : 'Browser'})`;
-    
-    // Poll briefly until socket opens, then send request
+
+    // 10-second connection timeout: if socket cannot connect to relay within 10s, fail with clear error
+    const connectionStartTime = Date.now();
+    pairingConnectTimerRef.current = setTimeout(() => {
+      if (pairingPollTimerRef.current) {
+        clearTimeout(pairingPollTimerRef.current);
+        pairingPollTimerRef.current = null;
+      }
+      transportRef.current?.disconnect();
+      setState((prev: RemoteState) => ({
+        ...prev,
+        pairing: 'unpaired',
+        matchingCode: null,
+        errorMessage: `Cannot reach relay at ${challenge.relayUrl}. Ensure phone and laptop are on the same Wi-Fi network and firewall allows access.`,
+      }));
+    }, 10000);
+
+    // Poll until socket opens, then send pair_request and transition to 60-second approval timeout
     const checkOpenAndSend = () => {
       if (transportRef.current?.getStatus() === 'connected') {
+        if (pairingConnectTimerRef.current) {
+          clearTimeout(pairingConnectTimerRef.current);
+          pairingConnectTimerRef.current = null;
+        }
+
         transportRef.current.sendPairRequest(challenge.challengeId, challenge.shortCode, deviceLabel);
+
+        // 60-second approval timeout matching challenge TTL
+        if (pairingApprovalTimerRef.current) {
+          clearTimeout(pairingApprovalTimerRef.current);
+        }
+        pairingApprovalTimerRef.current = setTimeout(() => {
+          transportRef.current?.disconnect();
+          setState((prev: RemoteState) => ({
+            ...prev,
+            pairing: 'expired',
+            matchingCode: null,
+            errorMessage: 'Pairing request timed out. Please generate a new QR code on the companion.',
+          }));
+        }, 60000);
       } else {
-        setTimeout(checkOpenAndSend, 100);
+        if (Date.now() - connectionStartTime < 10000) {
+          pairingPollTimerRef.current = setTimeout(checkOpenAndSend, 100);
+        }
       }
     };
     checkOpenAndSend();
@@ -382,14 +471,8 @@ export function useRemoteTransport() {
         transportRef.current?.queryState();
       }, 5000);
 
-      const messageId =
-        typeof crypto !== 'undefined' && crypto.randomUUID
-          ? crypto.randomUUID()
-          : 'msg_' + Date.now();
-      const correlationId =
-        typeof crypto !== 'undefined' && crypto.randomUUID
-          ? crypto.randomUUID()
-          : 'corr_' + Date.now();
+      const messageId = generateUuid();
+      const correlationId = generateUuid();
       transportRef.current.sendSetMicrophone(
         desired,
         state.stateRevision,
@@ -451,14 +534,8 @@ export function useRemoteTransport() {
         transportRef.current?.queryState();
       }, 5000);
 
-      const messageId =
-        typeof crypto !== 'undefined' && crypto.randomUUID
-          ? crypto.randomUUID()
-          : 'msg_' + Date.now();
-      const correlationId =
-        typeof crypto !== 'undefined' && crypto.randomUUID
-          ? crypto.randomUUID()
-          : 'corr_' + Date.now();
+      const messageId = generateUuid();
+      const correlationId = generateUuid();
       transportRef.current.sendSetCamera(
         desired,
         state.stateRevision,
@@ -548,14 +625,8 @@ export function useRemoteTransport() {
         transportRef.current?.queryState();
       }, 5000);
 
-      const messageId =
-        typeof crypto !== 'undefined' && crypto.randomUUID
-          ? crypto.randomUUID()
-          : 'msg_' + Date.now();
-      const correlationId =
-        typeof crypto !== 'undefined' && crypto.randomUUID
-          ? crypto.randomUUID()
-          : 'corr_' + Date.now();
+      const messageId = generateUuid();
+      const correlationId = generateUuid();
       transportRef.current.sendSetHand(
         desired,
         state.stateRevision,
@@ -582,6 +653,15 @@ export function useRemoteTransport() {
       if (handActionTimerRef.current) {
         clearTimeout(handActionTimerRef.current);
       }
+      if (pairingConnectTimerRef.current) {
+        clearTimeout(pairingConnectTimerRef.current);
+      }
+      if (pairingApprovalTimerRef.current) {
+        clearTimeout(pairingApprovalTimerRef.current);
+      }
+      if (pairingPollTimerRef.current) {
+        clearTimeout(pairingPollTimerRef.current);
+      }
     };
   }, []);
 
@@ -595,6 +675,18 @@ export function useRemoteTransport() {
     }
     setHasConfirmedCameraSafetyThisSession(false);
     setShowCameraSafetyModal(false);
+    if (pairingConnectTimerRef.current) {
+      clearTimeout(pairingConnectTimerRef.current);
+      pairingConnectTimerRef.current = null;
+    }
+    if (pairingApprovalTimerRef.current) {
+      clearTimeout(pairingApprovalTimerRef.current);
+      pairingApprovalTimerRef.current = null;
+    }
+    if (pairingPollTimerRef.current) {
+      clearTimeout(pairingPollTimerRef.current);
+      pairingPollTimerRef.current = null;
+    }
     PairingStorage.clearCredentials();
     transportRef.current?.setCredentials(null);
     transportRef.current?.disconnect();

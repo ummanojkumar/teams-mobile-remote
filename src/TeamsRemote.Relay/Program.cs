@@ -16,14 +16,52 @@ public class Program
         Host.CreateDefaultBuilder(args)
             .ConfigureWebHostDefaults(webBuilder =>
             {
-                webBuilder.UseUrls("http://127.0.0.1:5100");
+                bool devLan = string.Equals(
+                    Environment.GetEnvironmentVariable("TEAMS_REMOTE_DEV_LAN"),
+                    "true",
+                    StringComparison.OrdinalIgnoreCase);
+
+                if (devLan)
+                {
+                    webBuilder.UseUrls("http://0.0.0.0:5100;http://127.0.0.1:5100");
+                }
+                else
+                {
+                    webBuilder.UseUrls("http://127.0.0.1:5100");
+                }
+
+                string? devPwaOrigin = Environment.GetEnvironmentVariable("TEAMS_REMOTE_DEV_PWA_ORIGIN");
+
                 webBuilder.ConfigureServices(services =>
                 {
                     services.AddSingleton<DeviceRouteManager>();
+                    services.AddCors(options =>
+                    {
+                        options.AddDefaultPolicy(policy =>
+                        {
+                            var origins = new List<string>
+                            {
+                                "http://localhost:5173",
+                                "http://127.0.0.1:5173"
+                            };
+
+                            if (!string.IsNullOrWhiteSpace(devPwaOrigin) &&
+                                Uri.TryCreate(devPwaOrigin.Trim(), UriKind.Absolute, out var uri))
+                            {
+                                origins.Add(uri.GetLeftPart(UriPartial.Authority));
+                            }
+
+                            policy.WithOrigins(origins.ToArray())
+                                  .AllowAnyHeader()
+                                  .AllowAnyMethod();
+                        });
+                    });
                 });
 
                 webBuilder.Configure(app =>
                 {
+                    app.UseCors();
+
                     var routeManager = app.ApplicationServices.GetRequiredService<DeviceRouteManager>();
 
                     app.UseWebSockets(new WebSocketOptions

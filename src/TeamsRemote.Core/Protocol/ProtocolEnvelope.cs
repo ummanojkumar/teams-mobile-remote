@@ -17,12 +17,15 @@ public record ProtocolEnvelope
     public required string Type { get; init; }
 
     [JsonPropertyName("messageId")]
+    [JsonConverter(typeof(LenientGuidConverter))]
     public Guid MessageId { get; init; } = Guid.NewGuid();
 
     [JsonPropertyName("correlationId")]
+    [JsonConverter(typeof(LenientGuidConverter))]
     public Guid CorrelationId { get; init; } = Guid.NewGuid();
 
     [JsonPropertyName("deviceId")]
+    [JsonConverter(typeof(LenientGuidConverter))]
     public Guid DeviceId { get; init; } = Guid.Empty;
 
     [JsonPropertyName("sentAt")]
