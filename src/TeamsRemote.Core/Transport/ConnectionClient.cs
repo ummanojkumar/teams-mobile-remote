@@ -236,7 +236,7 @@ public sealed class ConnectionClient : IAsyncDisposable
 
     public async Task SendStateSnapshotAsync(CancellationToken cancellationToken = default)
     {
-        var (rev, micState, micConf, cameraState, cameraCap, cameraConf, meeting) = _stateStore.GetFullSnapshot();
+        var (rev, micState, micConf, cameraState, cameraCap, cameraConf, handState, handCap, handConf, meeting) = _stateStore.GetFullSnapshot();
 
         bool isMicUnavailable = string.Equals(micState, TeamsControlState.Unknown, StringComparison.OrdinalIgnoreCase) ||
                                 string.Equals(meeting, "none", StringComparison.OrdinalIgnoreCase) ||
@@ -246,6 +246,11 @@ public sealed class ConnectionClient : IAsyncDisposable
                                    string.Equals(meeting, "none", StringComparison.OrdinalIgnoreCase) ||
                                    cameraCap == ControlCapabilityTier.Unavailable ||
                                    cameraConf == StateConfidence.Unknown;
+
+        bool isHandUnavailable = string.Equals(handState, TeamsControlState.Unknown, StringComparison.OrdinalIgnoreCase) ||
+                                 string.Equals(meeting, "none", StringComparison.OrdinalIgnoreCase) ||
+                                 handCap == ControlCapabilityTier.Unavailable ||
+                                 handConf == StateConfidence.Unknown;
 
         var snapshot = new StateSnapshotPayload
         {
@@ -267,9 +272,9 @@ public sealed class ConnectionClient : IAsyncDisposable
                 },
                 ["hand"] = new ControlSnapshotItem
                 {
-                    Value = "unknown",
-                    Capability = "unavailable",
-                    Confidence = "unknown"
+                    Value = isHandUnavailable ? "unknown" : handState,
+                    Capability = isHandUnavailable ? "unavailable" : handCap.ToWireString(),
+                    Confidence = handConf.ToString().ToLowerInvariant()
                 }
             },
             Connection = "connected",

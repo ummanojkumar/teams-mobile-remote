@@ -131,7 +131,7 @@ public sealed class CommandProcessor
                 break;
 
             case "query_state":
-                var (rev, micState, conf, meeting) = _stateStore.GetSnapshot();
+                var (rev, micState, conf, camState, camCap, camConf, handState, handCap, handConf, meeting) = _stateStore.GetFullSnapshot();
                 execResult = new CommandResultPayload
                 {
                     Status = "confirmed",
@@ -140,6 +140,12 @@ public sealed class CommandProcessor
                     {
                         ["microphone"] = micState,
                         ["confidence"] = conf.ToString().ToLowerInvariant(),
+                        ["camera"] = camState,
+                        ["camera_capability"] = camCap.ToWireString(),
+                        ["camera_confidence"] = camConf.ToString().ToLowerInvariant(),
+                        ["hand"] = handState,
+                        ["hand_capability"] = handCap.ToWireString(),
+                        ["hand_confidence"] = handConf.ToString().ToLowerInvariant(),
                         ["meeting"] = meeting
                     },
                     Reason = "Current state snapshot returned."
@@ -309,7 +315,7 @@ public sealed class CommandProcessor
                     break;
                 }
 
-                var (camRev, curMicForCam, _, curCamState, curCamCap, _, curMeetingForCam) = _stateStore.GetFullSnapshot();
+                var (camRev, curMicForCam, _, curCamState, curCamCap, _, _, _, _, curMeetingForCam) = _stateStore.GetFullSnapshot();
 
                 // Safe exception: If refreshed camera state already equals requested desired state,
                 // return AlreadyInDesiredState without invoking Teams.
@@ -392,7 +398,7 @@ public sealed class CommandProcessor
                                 cameraCapability: finalCap,
                                 cameraConfidence: StateConfidence.Confirmed);
 
-                            var (newCamRev, _, _, newCamState, newCamCap, newCamConf, newCamMeeting) = _stateStore.GetFullSnapshot();
+                            var (newCamRev, _, _, newCamState, newCamCap, newCamConf, _, _, _, newCamMeeting) = _stateStore.GetFullSnapshot();
                             execResult = new CommandResultPayload
                             {
                                 Status = "confirmed",
@@ -462,7 +468,7 @@ public sealed class CommandProcessor
                     Status = "unsupported",
                     StateRevision = _stateStore.StateRevision,
                     ErrorCode = ProtocolErrorCodes.UnsupportedInPhase4A,
-                    Reason = $"Remote control of '{cmdPayload.Command}' is locked in Phase 4C."
+                    Reason = $"Remote control of '{cmdPayload.Command}' is locked in Phase 5A."
                 };
                 break;
 

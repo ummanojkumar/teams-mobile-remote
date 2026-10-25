@@ -44,6 +44,8 @@ public class MicrophoneRemoteExecutionTests
 
         public IDisposable? SubscribeCameraStateChanged(Action onStateChangeDetected) => null;
 
+        public IDisposable? SubscribeHandStateChanged(Action onStateChangeDetected) => null;
+
         public Task<CameraCommandResult> SetCameraStateAsync(DesiredCameraState desired, CancellationToken cancellationToken = default) =>
             throw new NotImplementedException();
 

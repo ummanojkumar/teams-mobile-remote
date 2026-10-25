@@ -152,6 +152,12 @@ export const ControlCard: React.FC<ControlCardProps> = ({
         ? 'Camera action-eligible — tap to turn on and verify control'
         : 'Camera action-eligible — tap to turn off and verify control';
     }
+  } else if (type === 'hand') {
+    if (confidence === 'confirmed') {
+      subtext = 'Raise hand observation active (Phase 5A spike) — control disabled';
+    } else {
+      subtext = 'Raise hand observation waiting for Teams meeting state';
+    }
   } else if (isMic) {
     subtext = 'Microphone control waiting for verified Teams meeting state';
   } else if (isCamera) {
@@ -181,8 +187,8 @@ export const ControlCard: React.FC<ControlCardProps> = ({
             <CheckCircle size={12} />
             <span>Remote Active</span>
           </div>
-        ) : isCamera && capability === 'observe-only' ? (
-          <div className="phase-observe-badge" title="Camera capability: observe-only (action-eligible)">
+        ) : ((isCamera || type === 'hand') && capability === 'observe-only') ? (
+          <div className="phase-observe-badge" title={`${title} capability: observe-only`}>
             <Lock size={12} />
             <span>Observe-Only</span>
           </div>
@@ -328,7 +334,7 @@ export const ControlCard: React.FC<ControlCardProps> = ({
           }}
         >
           <Lock size={14} />
-          <span>Not enabled yet (Phase 4B/C)</span>
+          <span>Not enabled yet</span>
         </button>
       )}
     </div>

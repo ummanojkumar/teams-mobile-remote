@@ -13,8 +13,8 @@ describe('Strict Hand Command Gating (Phase 4C)', () => {
 
   it('renders "Not enabled yet" badge and button label on Hand control card', () => {
     render(<ControlCard type="hand" snapshot={dummyHandSnapshot} isConnected={true} />);
-    expect(screen.getByText('Not enabled yet')).toBeInTheDocument();
-    expect(screen.getByText('Not enabled yet (Phase 4B/C)')).toBeInTheDocument();
+    const notEnabledElements = screen.getAllByText('Not enabled yet');
+    expect(notEnabledElements.length).toBe(2);
   });
 
   it('ensures hand control button has disabled and aria-disabled="true" attributes', () => {

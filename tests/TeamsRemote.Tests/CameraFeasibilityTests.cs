@@ -70,6 +70,8 @@ public class CameraFeasibilityTests
 
         public IDisposable? SubscribeMicrophoneStateChanged(Action onStateChangeDetected) => null;
 
+        public IDisposable? SubscribeHandStateChanged(Action onStateChangeDetected) => null;
+
         public IDisposable? SubscribeCameraStateChanged(Action onStateChangeDetected)
         {
             CameraSubscriptionCreatedCount++;
@@ -243,7 +245,7 @@ public class CameraFeasibilityTests
         Assert.Equal(2, changeCount);
 
         // 4. Full Snapshot query returns all values
-        var (rev, micState, micConf, cameraState, cameraCap, cameraConf, meeting) = store.GetFullSnapshot();
+        var (rev, micState, micConf, cameraState, cameraCap, cameraConf, handState, handCap, handConf, meeting) = store.GetFullSnapshot();
         Assert.Equal(2, rev);
         Assert.Equal(TeamsControlState.Muted, micState);
         Assert.Equal(StateConfidence.Confirmed, micConf);

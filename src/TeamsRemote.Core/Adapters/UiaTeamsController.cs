@@ -400,6 +400,46 @@ public sealed class UiaTeamsController : ITeamsController
         }
     }
 
+    public IDisposable? SubscribeHandStateChanged(Action onStateChangeDetected)
+    {
+        ThrowIfDisposed();
+
+        try
+        {
+            var processInfo = DetectTeamsProcess();
+            if (!processInfo.IsRunning) return null;
+
+            var (surface, meetingWindow) = FindMeetingSurface(processInfo.AllProcessIds);
+            if (!surface.IsDetected || meetingWindow == null) return null;
+
+            var controls = FindControlElements(meetingWindow);
+            var handElement = controls[TargetControl.Hand];
+            if (handElement == null) return null;
+
+            var propHandler = handElement.RegisterPropertyChangedEvent(
+                TreeScope.Element,
+                (automationElement, propertyId, newValue) =>
+                {
+                    try
+                    {
+                        onStateChangeDetected();
+                    }
+                    catch
+                    {
+                        // Safe swallow on background MTA callback
+                    }
+                },
+                _automation.PropertyLibrary.Element.Name,
+                _automation.PropertyLibrary.Toggle.ToggleState);
+
+            return propHandler;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public async Task ObserveEventsAsync(
         TimeSpan duration,
         Action<ControlEventReport> onEventObserved,
@@ -623,7 +663,8 @@ public sealed class UiaTeamsController : ITeamsController
             var cf = _automation.ConditionFactory;
             var condition = cf.ByControlType(FlaUI.Core.Definitions.ControlType.Button)
                 .Or(cf.ByControlType(FlaUI.Core.Definitions.ControlType.SplitButton))
-                .Or(cf.ByControlType(FlaUI.Core.Definitions.ControlType.CheckBox));
+                .Or(cf.ByControlType(FlaUI.Core.Definitions.ControlType.CheckBox))
+                .Or(cf.ByControlType(FlaUI.Core.Definitions.ControlType.MenuItem));
 
             var candidates = rootWindow.FindAllDescendants(condition);
 
@@ -644,12 +685,30 @@ public sealed class UiaTeamsController : ITeamsController
                         result[TargetControl.Camera] = el;
                     }
 
-                    if (result[TargetControl.Hand] == null && IsHandControl(name, autoId))
+                    bool isExplicitHand = IsExplicitHandControl(name, autoId);
+                    bool isGenericNavHand = IsGenericReactionsControl(name, autoId);
+
+                    if (result[TargetControl.Hand] == null && (isExplicitHand || isGenericNavHand))
                     {
                         result[TargetControl.Hand] = el;
                     }
+                    else if (result[TargetControl.Hand] is { } prevHand && isExplicitHand)
+                    {
+                        // Prefer explicit state-bearing control over generic reactions button
+                        string prevName = prevHand.Properties.Name.ValueOrDefault ?? string.Empty;
+                        string prevId = prevHand.Properties.AutomationId.ValueOrDefault ?? string.Empty;
+                        if (!IsExplicitHandControl(prevName, prevId))
+                        {
+                            result[TargetControl.Hand] = el;
+                        }
+                    }
 
-                    if (result.Values.All(v => v != null))
+                    if (result[TargetControl.Microphone] != null &&
+                        result[TargetControl.Camera] != null &&
+                        result[TargetControl.Hand] is { } finalHand &&
+                        IsExplicitHandControl(
+                            finalHand.Properties.Name.ValueOrDefault ?? string.Empty,
+                            finalHand.Properties.AutomationId.ValueOrDefault ?? string.Empty))
                     {
                         break;
                     }
@@ -781,15 +840,33 @@ public sealed class UiaTeamsController : ITeamsController
                (n.Contains("camera") && (n.Contains("turn") || n.Contains("video") || n.Contains("ctrl+shift+o")));
     }
 
-    private static bool IsHandControl(string name, string autoId)
+    private static bool IsExplicitHandControl(string name, string autoId)
     {
         string n = name.ToLowerInvariant();
         string id = autoId.ToLowerInvariant();
 
+        if (n.Contains("react and raise hand") || n.Equals("reactions") || id.Contains("reactions-button"))
+        {
+            return false;
+        }
+
         return id.Contains("raise-hand") || id.Contains("hand-button") ||
                n.Contains("raise hand") || n.Contains("lower hand") ||
                n.Contains("raise your hand") || n.Contains("lower your hand") ||
-               n.Contains("react and raise hand");
+               n.Contains("hand is raised") || n.Contains("hand is lowered");
+    }
+
+    private static bool IsGenericReactionsControl(string name, string autoId)
+    {
+        string n = name.ToLowerInvariant();
+        string id = autoId.ToLowerInvariant();
+
+        return id.Contains("reactions") || n.Contains("react and raise hand") || n.Equals("reactions");
+    }
+
+    private static bool IsHandControl(string name, string autoId)
+    {
+        return IsExplicitHandControl(name, autoId) || IsGenericReactionsControl(name, autoId);
     }
 
     private static ControlDiagnosticInfo CreateMissingControl(TargetControl target, string reason)

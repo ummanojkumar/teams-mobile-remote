@@ -48,6 +48,15 @@ public static class ControlCapabilityClassifier
                     : $"Camera state '{readableState}' is observable (observe-only). Action patterns unavailable or control disabled.");
         }
 
+        // Phase 5A Rule: Static classification for Raise Hand strictly remains ObserveOnly.
+        // Remote control is not enabled in Phase 5A, so Verified capability is never assigned.
+        if (targetControl == TargetControl.Hand)
+        {
+            return (
+                ControlCapabilityTier.ObserveOnly,
+                $"Raise Hand state '{readableState}' is observable (Phase 5A observe-only spike). Remote control remains disabled.");
+        }
+
         var patterns = supportedPatterns.ToList();
         var presentActionablePatterns = patterns.Where(p => ActionablePatterns.Contains(p)).ToList();
 
@@ -168,14 +177,32 @@ public static class ControlCapabilityClassifier
                 break;
 
             case TargetControl.Hand:
-                if (lower.Contains("lower hand") || lower.Contains("lower your hand"))
+                // Phase 5A Rule: Treat "React and raise hand" or generic reactions buttons strictly as navigation candidates.
+                // Do NOT infer raised/lowered state from generic reactions buttons.
+                if (lower.Contains("react and raise hand") || lower.Equals("reactions") || lower.Contains("reactions button"))
                 {
-                    // Action is to lower, so currently RAISED
+                    return (TeamsControlState.Unknown, false);
+                }
+
+                // Explicit status element reporting
+                if (lower.Contains("hand is raised") || lower.Contains("your hand is raised") || lower.Contains("hand raised"))
+                {
                     return (TeamsControlState.Raised, true);
                 }
+                if (lower.Contains("hand is lowered") || lower.Contains("your hand is lowered") || lower.Contains("hand lowered"))
+                {
+                    return (TeamsControlState.Lowered, true);
+                }
+
+                // Explicit accessible control action strings:
+                // "Lower hand" (action is to lower, so currently RAISED)
+                if (lower.Contains("lower hand") || lower.Contains("lower your hand"))
+                {
+                    return (TeamsControlState.Raised, true);
+                }
+                // "Raise hand" (action is to raise, so currently LOWERED)
                 if (lower.Contains("raise hand") || lower.Contains("raise your hand"))
                 {
-                    // Action is to raise, so currently LOWERED
                     return (TeamsControlState.Lowered, true);
                 }
                 break;

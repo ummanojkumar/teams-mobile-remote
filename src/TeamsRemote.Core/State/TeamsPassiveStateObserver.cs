@@ -27,6 +27,7 @@ public sealed class TeamsPassiveStateObserver : IDisposable
 
     private IDisposable? _currentMicSubscription;
     private IDisposable? _currentCameraSubscription;
+    private IDisposable? _currentHandSubscription;
     private Timer? _debounceTimer;
     private CancellationTokenSource? _pollingCts;
     private Task? _pollingTask;
@@ -167,9 +168,10 @@ public sealed class TeamsPassiveStateObserver : IDisposable
                 return _stateStore.MarkUnavailable("none");
             }
 
-            // Case 3: Active meeting surface detected - inspect both Microphone and Camera
+            // Case 3: Active meeting surface detected - inspect Microphone, Camera, and Hand
             var mic = report.Controls.FirstOrDefault(c => c.TargetControl == TargetControl.Microphone);
             var camera = report.Controls.FirstOrDefault(c => c.TargetControl == TargetControl.Camera);
+            var hand = report.Controls.FirstOrDefault(c => c.TargetControl == TargetControl.Hand);
 
             string micState = (mic != null && mic.Found && mic.ReadableState != TeamsControlState.Unknown)
                 ? mic.ReadableState
@@ -190,16 +192,32 @@ public sealed class TeamsPassiveStateObserver : IDisposable
                 ? StateConfidence.Confirmed
                 : StateConfidence.Unknown;
 
-            if (micState == TeamsControlState.Unknown && cameraState == TeamsControlState.Unknown)
+            // Phase 5A Rule: Hand capability strictly remains ObserveOnly when readable (never Verified in Phase 5A)
+            string handState = (hand != null && hand.Found && hand.ReadableState != TeamsControlState.Unknown)
+                ? hand.ReadableState
+                : TeamsControlState.Unknown;
+
+            ControlCapabilityTier handCap = (handState != TeamsControlState.Unknown)
+                ? ControlCapabilityTier.ObserveOnly
+                : ControlCapabilityTier.Unavailable;
+
+            StateConfidence handConf = (handState != TeamsControlState.Unknown)
+                ? StateConfidence.Confirmed
+                : StateConfidence.Unknown;
+
+            if (micState == TeamsControlState.Unknown && cameraState == TeamsControlState.Unknown && handState == TeamsControlState.Unknown)
             {
                 DisposeCurrentSubscriptions();
                 return _stateStore.UpdateObserved(
                     TeamsControlState.Unknown,
                     TeamsControlState.Unknown,
+                    TeamsControlState.Unknown,
                     isConfirmed: false,
                     meetingStatus: "active",
                     cameraCapability: ControlCapabilityTier.Unavailable,
-                    cameraConfidence: StateConfidence.Unknown);
+                    cameraConfidence: StateConfidence.Unknown,
+                    handCapability: ControlCapabilityTier.Unavailable,
+                    handConfidence: StateConfidence.Unknown);
             }
 
             EnsureUiaSubscriptions();
@@ -207,10 +225,13 @@ public sealed class TeamsPassiveStateObserver : IDisposable
             return _stateStore.UpdateObserved(
                 micState,
                 cameraState,
+                handState,
                 isConfirmed: isMicConfirmed,
                 meetingStatus: "active",
                 cameraCapability: cameraCap,
-                cameraConfidence: cameraConf);
+                cameraConfidence: cameraConf,
+                handCapability: handCap,
+                handConfidence: handConf);
         }
         catch
         {
@@ -218,10 +239,13 @@ public sealed class TeamsPassiveStateObserver : IDisposable
             return _stateStore.UpdateObserved(
                 TeamsControlState.Unknown,
                 TeamsControlState.Unknown,
+                TeamsControlState.Unknown,
                 isConfirmed: false,
                 meetingStatus: "active",
                 cameraCapability: ControlCapabilityTier.Unavailable,
-                cameraConfidence: StateConfidence.Unknown);
+                cameraConfidence: StateConfidence.Unknown,
+                handCapability: ControlCapabilityTier.Unavailable,
+                handConfidence: StateConfidence.Unknown);
         }
         finally
         {
@@ -254,6 +278,18 @@ public sealed class TeamsPassiveStateObserver : IDisposable
                 catch
                 {
                     _currentCameraSubscription = null;
+                }
+            }
+
+            if (_currentHandSubscription == null)
+            {
+                try
+                {
+                    _currentHandSubscription = _teamsController.SubscribeHandStateChanged(() => OnUiaEventRaised());
+                }
+                catch
+                {
+                    _currentHandSubscription = null;
                 }
             }
         }
@@ -292,6 +328,22 @@ public sealed class TeamsPassiveStateObserver : IDisposable
                 finally
                 {
                     _currentCameraSubscription = null;
+                }
+            }
+
+            if (_currentHandSubscription != null)
+            {
+                try
+                {
+                    _currentHandSubscription.Dispose();
+                }
+                catch
+                {
+                    // Ignore disposal error
+                }
+                finally
+                {
+                    _currentHandSubscription = null;
                 }
             }
 

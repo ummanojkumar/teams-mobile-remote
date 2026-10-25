@@ -60,6 +60,7 @@ public class CameraRemoteExecutionTests
 
         public IDisposable? SubscribeMicrophoneStateChanged(Action onStateChangeDetected) => null;
         public IDisposable? SubscribeCameraStateChanged(Action onStateChangeDetected) => null;
+        public IDisposable? SubscribeHandStateChanged(Action onStateChangeDetected) => null;
         public void Dispose() { }
     }
 

@@ -18,9 +18,11 @@ public class PassiveStateSynchronizationTests
         public int MicSubscriptionDisposedCount { get; private set; }
         public int CameraSubscriptionCreatedCount { get; private set; }
         public int CameraSubscriptionDisposedCount { get; private set; }
+        public int HandSubscriptionCreatedCount { get; private set; }
+        public int HandSubscriptionDisposedCount { get; private set; }
 
-        public int SubscriptionCreatedCount => MicSubscriptionCreatedCount + CameraSubscriptionCreatedCount;
-        public int SubscriptionDisposedCount => MicSubscriptionDisposedCount + CameraSubscriptionDisposedCount;
+        public int SubscriptionCreatedCount => MicSubscriptionCreatedCount + CameraSubscriptionCreatedCount + HandSubscriptionCreatedCount;
+        public int SubscriptionDisposedCount => MicSubscriptionDisposedCount + CameraSubscriptionDisposedCount + HandSubscriptionDisposedCount;
 
         public Action? RegisteredUiaCallback { get; private set; }
 
@@ -83,6 +85,15 @@ public class PassiveStateSynchronizationTests
             return new SubscriptionToken(() =>
             {
                 CameraSubscriptionDisposedCount++;
+            });
+        }
+
+        public IDisposable? SubscribeHandStateChanged(Action onStateChangeDetected)
+        {
+            HandSubscriptionCreatedCount++;
+            return new SubscriptionToken(() =>
+            {
+                HandSubscriptionDisposedCount++;
             });
         }
 
@@ -290,34 +301,38 @@ public class PassiveStateSynchronizationTests
 
         using var observer = new TeamsPassiveStateObserver(controller, stateStore);
 
-        // Initial scan: establishes subscriptions (1 mic + 1 camera)
+        // Initial scan: establishes subscriptions (1 mic + 1 camera + 1 hand)
         await observer.PollOnceAsync();
         Assert.Equal(1, controller.MicSubscriptionCreatedCount);
         Assert.Equal(1, controller.CameraSubscriptionCreatedCount);
-        Assert.Equal(2, controller.SubscriptionCreatedCount);
+        Assert.Equal(1, controller.HandSubscriptionCreatedCount);
+        Assert.Equal(3, controller.SubscriptionCreatedCount);
         Assert.Equal(0, controller.SubscriptionDisposedCount);
 
-        // Meeting drops: disposes both subscriptions
+        // Meeting drops: disposes all 3 subscriptions
         controller.MeetingDetected = false;
         await observer.PollOnceAsync();
-        Assert.Equal(2, controller.SubscriptionCreatedCount);
+        Assert.Equal(3, controller.SubscriptionCreatedCount);
         Assert.Equal(1, controller.MicSubscriptionDisposedCount);
         Assert.Equal(1, controller.CameraSubscriptionDisposedCount);
-        Assert.Equal(2, controller.SubscriptionDisposedCount);
+        Assert.Equal(1, controller.HandSubscriptionDisposedCount);
+        Assert.Equal(3, controller.SubscriptionDisposedCount);
 
-        // Meeting resumes: re-establishes both subscriptions
+        // Meeting resumes: re-establishes all 3 subscriptions
         controller.MeetingDetected = true;
         await observer.PollOnceAsync();
         Assert.Equal(2, controller.MicSubscriptionCreatedCount);
         Assert.Equal(2, controller.CameraSubscriptionCreatedCount);
-        Assert.Equal(4, controller.SubscriptionCreatedCount);
-        Assert.Equal(2, controller.SubscriptionDisposedCount);
+        Assert.Equal(2, controller.HandSubscriptionCreatedCount);
+        Assert.Equal(6, controller.SubscriptionCreatedCount);
+        Assert.Equal(3, controller.SubscriptionDisposedCount);
 
-        // Observer disposed: disposes both subscriptions cleanly
+        // Observer disposed: disposes all 3 subscriptions cleanly
         observer.Dispose();
-        Assert.Equal(4, controller.SubscriptionCreatedCount);
+        Assert.Equal(6, controller.SubscriptionCreatedCount);
         Assert.Equal(2, controller.MicSubscriptionDisposedCount);
         Assert.Equal(2, controller.CameraSubscriptionDisposedCount);
-        Assert.Equal(4, controller.SubscriptionDisposedCount);
+        Assert.Equal(2, controller.HandSubscriptionDisposedCount);
+        Assert.Equal(6, controller.SubscriptionDisposedCount);
     }
 }
