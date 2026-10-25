@@ -79,4 +79,42 @@ public static class DesiredStateDecisionEngine
             CommandExecutionStatus.Confirmed,
             $"Camera state '{currentState}' differs from requested state '{targetWire}'. Invocation required.");
     }
+
+    public static (bool ShouldInvoke, CommandExecutionStatus Status, string Reason) EvaluateHand(
+        string currentState,
+        DesiredHandState desiredState,
+        bool hasActionablePattern,
+        bool isEnabled)
+    {
+        string targetWire = desiredState.ToWireString();
+
+        if (string.Equals(currentState, TeamsControlState.Unknown, StringComparison.OrdinalIgnoreCase))
+        {
+            return (
+                false,
+                CommandExecutionStatus.StateUncertain,
+                "Current hand state is unknown or unreadable. Action prohibited to prevent unsafe toggling.");
+        }
+
+        if (string.Equals(currentState, targetWire, StringComparison.OrdinalIgnoreCase))
+        {
+            return (
+                false,
+                CommandExecutionStatus.AlreadyInDesiredState,
+                $"Hand is already {currentState}. No invocation required.");
+        }
+
+        if (!hasActionablePattern || !isEnabled)
+        {
+            return (
+                false,
+                CommandExecutionStatus.Unsupported,
+                "Raise Hand control does not support an actionable invocation pattern (Toggle/Invoke) or is disabled.");
+        }
+
+        return (
+            true,
+            CommandExecutionStatus.Confirmed,
+            $"Hand state '{currentState}' differs from requested state '{targetWire}'. Invocation required.");
+    }
 }

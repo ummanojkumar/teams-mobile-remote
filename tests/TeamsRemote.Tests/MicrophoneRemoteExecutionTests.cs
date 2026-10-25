@@ -49,6 +49,9 @@ public class MicrophoneRemoteExecutionTests
         public Task<CameraCommandResult> SetCameraStateAsync(DesiredCameraState desired, CancellationToken cancellationToken = default) =>
             throw new NotImplementedException();
 
+        public Task<HandCommandResult> SetHandStateAsync(DesiredHandState desired, CancellationToken cancellationToken = default) =>
+            throw new NotImplementedException();
+
         public void Dispose() { }
     }
 
@@ -255,22 +258,22 @@ public class MicrophoneRemoteExecutionTests
     }
 
     [Fact]
-    public async Task Hand_RemainsRejectedUnsupported()
+    public async Task Hand_UnknownState_RefusedWithStateUncertain()
     {
         var stateStore = new MeetingStateStore();
         var devId = Guid.NewGuid();
         var mockController = new MockTeamsController();
         var processor = new CommandProcessor(stateStore, () => devId, mockController);
 
-        // Hand remains strictly locked in Phase 4C
+        // Hand is unknown/unavailable initially, so action is refused
         var handEnv = ProtocolEnvelope.Create(
             ProtocolMessageType.Command,
             new CommandPayload { Command = "set_hand", Desired = "raised" },
             devId);
         var handRes = await processor.ProcessEnvelopeAsync(handEnv);
         var handPayload = handRes.DeserializePayload<CommandResultPayload>();
-        Assert.Equal("unsupported", handPayload?.Status);
-        Assert.Equal(ProtocolErrorCodes.UnsupportedInPhase4A, handPayload?.ErrorCode);
+        Assert.Equal("state_uncertain", handPayload?.Status);
+        Assert.Equal("STATE_UNKNOWN", handPayload?.ErrorCode);
     }
 
     [Fact]

@@ -267,11 +267,39 @@ export class TransportClient {
   }
 
   /**
-   * Phase 4C Constraint: Hand control commands remain strictly disabled.
+   * Phase 5B: Remote Desired-State Raise Hand Control
+   * Dispatches explicit 'raised' or 'lowered' desired-state command with expectedStateRevision.
+   */
+  sendSetHand(
+    desired: 'raised' | 'lowered',
+    expectedStateRevision: number,
+    messageId?: string,
+    correlationId?: string
+  ): boolean {
+    if (!this.hasValidCredentials()) return false;
+    const msgId = messageId || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'msg_' + Date.now());
+    const corrId = correlationId || msgId;
+
+    const envelope = createEnvelope(
+      'command',
+      {
+        command: 'set_hand',
+        desired,
+        expectedStateRevision,
+      },
+      this.getDeviceId(),
+      corrId,
+      msgId
+    );
+    return this.sendEnvelope(envelope);
+  }
+
+  /**
+   * Unknown/unsupported command guard.
    */
   sendRemoteControlCommand(command: string): never {
     throw new Error(
-      `Remote Teams control '${command}' is blocked in Phase 4C by UNSUPPORTED_IN_PHASE_4A constraint.`
+      `Remote Teams control '${command}' is not supported.`
     );
   }
 
@@ -281,6 +309,9 @@ export class TransportClient {
     }
     if (command === 'set_camera' && (desired === 'on' || desired === 'off')) {
       return this.sendSetCamera(desired, expectedStateRevision);
+    }
+    if (command === 'set_hand' && (desired === 'raised' || desired === 'lowered')) {
+      return this.sendSetHand(desired, expectedStateRevision);
     }
     return this.sendRemoteControlCommand(command);
   }

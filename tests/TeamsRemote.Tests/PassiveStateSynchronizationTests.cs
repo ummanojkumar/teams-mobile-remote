@@ -106,6 +106,9 @@ public class PassiveStateSynchronizationTests
         public Task<CameraCommandResult> SetCameraStateAsync(DesiredCameraState desiredState, CancellationToken cancellationToken = default) =>
             throw new NotImplementedException();
 
+        public Task<HandCommandResult> SetHandStateAsync(DesiredHandState desiredState, CancellationToken cancellationToken = default) =>
+            throw new NotImplementedException();
+
         public void Dispose() { }
 
         private class SubscriptionToken : IDisposable

@@ -463,13 +463,180 @@ public sealed class CommandProcessor
                 break;
 
             case "set_hand":
-                execResult = new CommandResultPayload
+                var targetHandDesired = cmdPayload.Desired?.Trim().ToLowerInvariant();
+                if (!DesiredHandStateExtensions.TryParseWire(targetHandDesired, out var desiredHandEnum))
                 {
-                    Status = "unsupported",
-                    StateRevision = _stateStore.StateRevision,
-                    ErrorCode = ProtocolErrorCodes.UnsupportedInPhase4A,
-                    Reason = $"Remote control of '{cmdPayload.Command}' is locked in Phase 5A."
-                };
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "rejected",
+                        StateRevision = _stateStore.StateRevision,
+                        ErrorCode = ProtocolErrorCodes.InvalidDesiredState,
+                        Reason = $"Invalid desired state '{cmdPayload.Desired}'. Expected 'raised' or 'lowered'."
+                    };
+                    break;
+                }
+
+                var (handRev, curMicForHand, curMicConfForHand, curCamForHand, curCamCapForHand, curCamConfForHand, curHandState, curHandCap, _, curMeetingForHand) = _stateStore.GetFullSnapshot();
+
+                // If current hand state is unknown/unavailable, refuse to act and return state_uncertain
+                if (string.Equals(curHandState, TeamsControlState.Unknown, StringComparison.OrdinalIgnoreCase) || curHandCap == ControlCapabilityTier.Unavailable)
+                {
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "state_uncertain",
+                        StateRevision = handRev,
+                        ErrorCode = "STATE_UNKNOWN",
+                        Reason = "Current hand state is unknown or unavailable. Action prohibited to prevent unsafe toggling."
+                    };
+                    break;
+                }
+
+                // Safe exception: If refreshed hand state already equals requested desired state,
+                // return AlreadyInDesiredState without invoking Teams.
+                if (string.Equals(curHandState, targetHandDesired, StringComparison.OrdinalIgnoreCase))
+                {
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "confirmed",
+                        StateRevision = handRev,
+                        Reason = $"Hand is already {targetHandDesired}. No action needed.",
+                        State = new Dictionary<string, string>
+                        {
+                            ["hand"] = curHandState,
+                            ["confidence"] = StateConfidence.Confirmed.ToString().ToLowerInvariant(),
+                            ["capability"] = curHandCap.ToWireString(),
+                            ["meeting"] = curMeetingForHand
+                        }
+                    };
+                    break;
+                }
+
+                // Strict revision rule:
+                // - If lower than current: reject with STALE_COMMAND
+                if (cmdPayload.ExpectedStateRevision.HasValue && cmdPayload.ExpectedStateRevision.Value < handRev)
+                {
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "rejected",
+                        StateRevision = handRev,
+                        ErrorCode = ProtocolErrorCodes.StaleCommand,
+                        Reason = $"Command rejected: expected state revision {cmdPayload.ExpectedStateRevision.Value} is lower than current revision {handRev}."
+                    };
+                    break;
+                }
+
+                // - If higher than current: reject with INVALID_STATE_REVISION
+                if (cmdPayload.ExpectedStateRevision.HasValue && cmdPayload.ExpectedStateRevision.Value > handRev)
+                {
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "rejected",
+                        StateRevision = handRev,
+                        ErrorCode = ProtocolErrorCodes.InvalidStateRevision,
+                        Reason = $"Command rejected: expected state revision {cmdPayload.ExpectedStateRevision.Value} is higher than current revision {handRev}."
+                    };
+                    break;
+                }
+
+                // Exact match (or no revision specified): proceed with UIA execution
+                if (_teamsController == null)
+                {
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "unsupported",
+                        StateRevision = handRev,
+                        ErrorCode = ProtocolErrorCodes.UnsupportedInPhase4A,
+                        Reason = "No Teams controller available to execute remote hand command."
+                    };
+                    break;
+                }
+
+                _stateStore.MarkHandPending();
+
+                try
+                {
+                    var actionResult = await _teamsController.SetHandStateAsync(desiredHandEnum, cancellationToken);
+                    switch (actionResult.Status)
+                    {
+                        case CommandExecutionStatus.Confirmed:
+                        case CommandExecutionStatus.AlreadyInDesiredState:
+                            var finalCap = actionResult.PromoteToVerified
+                                ? ControlCapabilityTier.Verified
+                                : curHandCap;
+
+                            _stateStore.UpdateObserved(
+                                curMicForHand,
+                                curCamForHand,
+                                actionResult.FinalState,
+                                isConfirmed: true,
+                                meetingStatus: "active",
+                                cameraCapability: curCamCapForHand,
+                                cameraConfidence: curCamConfForHand,
+                                handCapability: finalCap,
+                                handConfidence: StateConfidence.Confirmed);
+
+                            var (newHandRev, _, _, _, _, _, newHandState, newHandCap, newHandConf, newHandMeeting) = _stateStore.GetFullSnapshot();
+                            execResult = new CommandResultPayload
+                            {
+                                Status = "confirmed",
+                                StateRevision = newHandRev,
+                                Reason = actionResult.Reason,
+                                State = new Dictionary<string, string>
+                                {
+                                    ["hand"] = newHandState,
+                                    ["confidence"] = newHandConf.ToString().ToLowerInvariant(),
+                                    ["capability"] = newHandCap.ToWireString(),
+                                    ["meeting"] = newHandMeeting
+                                }
+                            };
+                            break;
+
+                        case CommandExecutionStatus.TimedOut:
+                        case CommandExecutionStatus.StateUncertain:
+                            _stateStore.MarkHandStaleOrUncertain();
+                            execResult = new CommandResultPayload
+                            {
+                                Status = "state_uncertain",
+                                StateRevision = _stateStore.StateRevision,
+                                ErrorCode = ProtocolErrorCodes.VerificationTimedOut,
+                                Reason = actionResult.Reason
+                            };
+                            break;
+
+                        case CommandExecutionStatus.Unsupported:
+                            _stateStore.MarkHandStaleOrUncertain();
+                            execResult = new CommandResultPayload
+                            {
+                                Status = "unsupported",
+                                StateRevision = _stateStore.StateRevision,
+                                ErrorCode = actionResult.ErrorCode ?? ProtocolErrorCodes.ControlNotFound,
+                                Reason = actionResult.Reason
+                            };
+                            break;
+
+                        default:
+                            _stateStore.MarkHandStaleOrUncertain();
+                            execResult = new CommandResultPayload
+                            {
+                                Status = "failed",
+                                StateRevision = _stateStore.StateRevision,
+                                ErrorCode = actionResult.ErrorCode ?? ProtocolErrorCodes.InvokeFailed,
+                                Reason = actionResult.Reason
+                            };
+                            break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _stateStore.MarkHandStaleOrUncertain();
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "failed",
+                        StateRevision = _stateStore.StateRevision,
+                        ErrorCode = ProtocolErrorCodes.InvokeFailed,
+                        Reason = ex.Message
+                    };
+                }
                 break;
 
             default:

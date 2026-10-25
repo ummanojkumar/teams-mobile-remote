@@ -178,6 +178,29 @@ public sealed class MeetingStateStore
         StateChanged?.Invoke();
     }
 
+    public void MarkHandPending()
+    {
+        lock (_lock)
+        {
+            HandConfidence = StateConfidence.Pending;
+            LastObservedAt = DateTimeOffset.UtcNow;
+        }
+
+        StateChanged?.Invoke();
+    }
+
+    public void MarkHandStaleOrUncertain()
+    {
+        lock (_lock)
+        {
+            HandConfidence = StateConfidence.Stale;
+            HandCapability = ControlCapabilityTier.ObserveOnly;
+            LastObservedAt = DateTimeOffset.UtcNow;
+        }
+
+        StateChanged?.Invoke();
+    }
+
     public bool ResetCameraCapabilityToObserveOnly()
     {
         bool changed = false;
@@ -186,6 +209,28 @@ public sealed class MeetingStateStore
             if (CameraCapability == ControlCapabilityTier.Verified)
             {
                 CameraCapability = ControlCapabilityTier.ObserveOnly;
+                StateRevision++;
+                LastObservedAt = DateTimeOffset.UtcNow;
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            StateChanged?.Invoke();
+        }
+
+        return changed;
+    }
+
+    public bool ResetHandCapabilityToObserveOnly()
+    {
+        bool changed = false;
+        lock (_lock)
+        {
+            if (HandCapability == ControlCapabilityTier.Verified)
+            {
+                HandCapability = ControlCapabilityTier.ObserveOnly;
                 StateRevision++;
                 LastObservedAt = DateTimeOffset.UtcNow;
                 changed = true;

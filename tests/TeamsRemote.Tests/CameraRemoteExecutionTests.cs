@@ -55,6 +55,9 @@ public class CameraRemoteExecutionTests
         public Task<TeamsDiagnosticReport> InspectAsync(CancellationToken cancellationToken = default) =>
             throw new NotImplementedException();
 
+        public Task<HandCommandResult> SetHandStateAsync(DesiredHandState desired, CancellationToken cancellationToken = default) =>
+            throw new NotImplementedException();
+
         public Task ObserveEventsAsync(TimeSpan duration, Action<ControlEventReport> onEventObserved, CancellationToken cancellationToken = default) =>
             throw new NotImplementedException();
 
@@ -460,7 +463,7 @@ public class CameraRemoteExecutionTests
     }
 
     [Fact]
-    public async Task SetHand_StillRejectedAsUnsupported()
+    public async Task SetHand_UnknownState_RefusedWithStateUncertain()
     {
         var stateStore = new MeetingStateStore();
         var devId = Guid.NewGuid();
@@ -480,7 +483,8 @@ public class CameraRemoteExecutionTests
         var payload = res.DeserializePayload<CommandResultPayload>();
 
         Assert.NotNull(payload);
-        Assert.Equal("unsupported", payload.Status);
+        Assert.Equal("state_uncertain", payload.Status);
+        Assert.Equal("STATE_UNKNOWN", payload.ErrorCode);
     }
 
     [Fact]

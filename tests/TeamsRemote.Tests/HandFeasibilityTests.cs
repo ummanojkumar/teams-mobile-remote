@@ -105,6 +105,9 @@ public class HandFeasibilityTests
         public Task<CameraCommandResult> SetCameraStateAsync(DesiredCameraState desiredState, CancellationToken cancellationToken = default) =>
             throw new NotImplementedException();
 
+        public Task<HandCommandResult> SetHandStateAsync(DesiredHandState desiredState, CancellationToken cancellationToken = default) =>
+            throw new NotImplementedException();
+
         public void Dispose() { }
 
         private class SubscriptionToken : IDisposable
@@ -380,7 +383,7 @@ public class HandFeasibilityTests
     }
 
     [Fact]
-    public async Task CommandProcessor_HandCommand_StrictlyRejectedInPhase5A()
+    public async Task CommandProcessor_HandCommand_UnknownState_RefusedWithStateUncertain()
     {
         var stateStore = new MeetingStateStore();
         var devId = Guid.NewGuid();
@@ -402,7 +405,7 @@ public class HandFeasibilityTests
 
         var result = responseEnv.DeserializePayload<CommandResultPayload>();
         Assert.NotNull(result);
-        Assert.Equal("unsupported", result.Status);
-        Assert.Equal(ProtocolErrorCodes.UnsupportedInPhase4A, result.ErrorCode);
+        Assert.Equal("state_uncertain", result.Status);
+        Assert.Equal("STATE_UNKNOWN", result.ErrorCode);
     }
 }

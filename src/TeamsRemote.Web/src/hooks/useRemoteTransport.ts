@@ -22,6 +22,9 @@ export function useRemoteTransport() {
   const [isCameraActionPending, setIsCameraActionPending] = useState(false);
   const cameraActionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const [isHandActionPending, setIsHandActionPending] = useState(false);
+  const handActionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const [hasConfirmedCameraSafetyThisSession, setHasConfirmedCameraSafetyThisSession] = useState(() => {
     try {
       return typeof sessionStorage !== 'undefined' && sessionStorage.getItem('teams_remote_camera_safety_confirmed') === 'true';
@@ -47,6 +50,12 @@ export function useRemoteTransport() {
       cameraActionTimerRef.current = null;
     }
     setIsCameraActionPending(false);
+
+    if (handActionTimerRef.current) {
+      clearTimeout(handActionTimerRef.current);
+      handActionTimerRef.current = null;
+    }
+    setIsHandActionPending(false);
 
     setState((prev: RemoteState) => ({
       ...prev,
@@ -458,6 +467,71 @@ export function useRemoteTransport() {
     setShowCameraSafetyModal(false);
   }, []);
 
+  const setHandState = useCallback(
+    (desired: 'raised' | 'lowered') => {
+      if (
+        !transportRef.current ||
+        isHandActionPending ||
+        state.connection !== 'connected' ||
+        state.controls.hand.confidence !== 'confirmed' ||
+        (state.controls.hand.capability !== 'observe-only' && state.controls.hand.capability !== 'verified')
+      ) {
+        return;
+      }
+
+      setIsHandActionPending(true);
+
+      // Optimistically mark confidence as pending
+      setState((prev: RemoteState) => ({
+        ...prev,
+        controls: {
+          ...prev.controls,
+          hand: {
+            ...prev.controls.hand,
+            confidence: 'pending',
+          },
+        },
+      }));
+
+      // Bounded safety timeout (5000ms)
+      if (handActionTimerRef.current) {
+        clearTimeout(handActionTimerRef.current);
+      }
+      handActionTimerRef.current = setTimeout(() => {
+        setIsHandActionPending(false);
+        setState((prev: RemoteState) => ({
+          ...prev,
+          errorMessage: 'Raise hand action timed out. Re-syncing state...',
+          controls: {
+            ...prev.controls,
+            hand: {
+              ...prev.controls.hand,
+              confidence: 'stale',
+            },
+          },
+        }));
+        transportRef.current?.queryState();
+      }, 5000);
+
+      const messageId =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : 'msg_' + Date.now();
+      transportRef.current.sendSetHand(
+        desired,
+        state.stateRevision,
+        messageId,
+        messageId
+      );
+    },
+    [
+      isHandActionPending,
+      state.connection,
+      state.controls.hand,
+      state.stateRevision,
+    ]
+  );
+
   useEffect(() => {
     return () => {
       if (micActionTimerRef.current) {
@@ -465,6 +539,9 @@ export function useRemoteTransport() {
       }
       if (cameraActionTimerRef.current) {
         clearTimeout(cameraActionTimerRef.current);
+      }
+      if (handActionTimerRef.current) {
+        clearTimeout(handActionTimerRef.current);
       }
     };
   }, []);
@@ -508,9 +585,11 @@ export function useRemoteTransport() {
     echoLog,
     isMicActionPending,
     isCameraActionPending,
+    isHandActionPending,
     showCameraSafetyModal,
     setMicrophoneState,
     setCameraState,
+    setHandState,
     confirmCameraSafety,
     cancelCameraSafety,
     startPairing,

@@ -89,6 +89,7 @@ public sealed class UiaTeamsController : ITeamsController
 
     private readonly MicrophoneActionCoordinator _coordinator = new();
     private readonly CameraActionCoordinator _cameraCoordinator = new();
+    private readonly HandActionCoordinator _handCoordinator = new();
 
     public async Task<MicrophoneCommandResult> SetMicrophoneStateAsync(
         DesiredMicrophoneState desiredState,
@@ -314,6 +315,124 @@ public sealed class UiaTeamsController : ITeamsController
                     : null;
 
                 var (state, _) = ControlCapabilityClassifier.ParseState(TargetControl.Camera, name, toggle);
+                return Task.FromResult(state);
+            },
+            verificationTimeout: TimeSpan.FromSeconds(2),
+            cancellationToken: cancellationToken);
+    }
+
+    public async Task<HandCommandResult> SetHandStateAsync(
+        DesiredHandState desiredState,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+
+        return await _handCoordinator.ExecuteAsync(
+            desiredState,
+            controlProvider: () =>
+            {
+                var processInfo = DetectTeamsProcess();
+                if (!processInfo.IsRunning)
+                {
+                    return Task.FromResult((
+                        found: false,
+                        currentState: TeamsControlState.Unknown,
+                        hasPattern: false,
+                        isEnabled: false,
+                        invokeAction: (Action)(() => { }),
+                        fingerprint: (string?)null));
+                }
+
+                var (meetingSurface, meetingWindow) = FindMeetingSurface(processInfo.AllProcessIds);
+                if (!meetingSurface.IsDetected || meetingWindow == null)
+                {
+                    return Task.FromResult((
+                        found: false,
+                        currentState: TeamsControlState.Unknown,
+                        hasPattern: false,
+                        isEnabled: false,
+                        invokeAction: (Action)(() => { }),
+                        fingerprint: (string?)null));
+                }
+
+                var controls = FindControlElements(meetingWindow);
+                var handElement = controls[TargetControl.Hand];
+                if (handElement == null)
+                {
+                    return Task.FromResult((
+                        found: false,
+                        currentState: TeamsControlState.Unknown,
+                        hasPattern: false,
+                        isEnabled: false,
+                        invokeAction: (Action)(() => { }),
+                        fingerprint: (string?)null));
+                }
+
+                string currentName = handElement.Properties.Name.ValueOrDefault ?? string.Empty;
+                string? currentToggle = handElement.Patterns.Toggle.IsSupported
+                    ? handElement.Patterns.Toggle.PatternOrDefault?.ToggleState.ValueOrDefault.ToString()
+                    : null;
+                string? currentHelp = handElement.Properties.HelpText.ValueOrDefault;
+
+                var (currentState, _) = ControlCapabilityClassifier.ParseState(
+                    TargetControl.Hand,
+                    currentName,
+                    currentToggle,
+                    currentHelp);
+
+                bool hasToggle = handElement.Patterns.Toggle.IsSupported;
+                bool hasInvoke = handElement.Patterns.Invoke.IsSupported;
+                bool isEnabled = handElement.Properties.IsEnabled.ValueOrDefault;
+
+                string fingerprint = $"{meetingSurface.WindowHandle}_{handElement.Properties.AutomationId.ValueOrDefault}_{handElement.Properties.ControlType.ValueOrDefault}";
+
+                Action invokeAction = () =>
+                {
+                    if (hasToggle)
+                    {
+                        handElement.Patterns.Toggle.PatternOrDefault?.Toggle();
+                    }
+                    else
+                    {
+                        handElement.Patterns.Invoke.PatternOrDefault?.Invoke();
+                    }
+                };
+
+                return Task.FromResult((
+                    found: true,
+                    currentState,
+                    hasPattern: hasToggle || hasInvoke,
+                    isEnabled,
+                    invokeAction,
+                    fingerprint: (string?)fingerprint));
+            },
+            reQueryStateFunc: () =>
+            {
+                var processInfo = DetectTeamsProcess();
+                if (!processInfo.IsRunning)
+                {
+                    return Task.FromResult(TeamsControlState.Unknown);
+                }
+
+                var (_, meetingWindow) = FindMeetingSurface(processInfo.AllProcessIds);
+                if (meetingWindow == null)
+                {
+                    return Task.FromResult(TeamsControlState.Unknown);
+                }
+
+                var controls = FindControlElements(meetingWindow);
+                var handElement = controls[TargetControl.Hand];
+                if (handElement == null)
+                {
+                    return Task.FromResult(TeamsControlState.Unknown);
+                }
+
+                string name = handElement.Properties.Name.ValueOrDefault ?? string.Empty;
+                string? toggle = handElement.Patterns.Toggle.IsSupported
+                    ? handElement.Patterns.Toggle.PatternOrDefault?.ToggleState.ValueOrDefault.ToString()
+                    : null;
+
+                var (state, _) = ControlCapabilityClassifier.ParseState(TargetControl.Hand, name, toggle);
                 return Task.FromResult(state);
             },
             verificationTimeout: TimeSpan.FromSeconds(2),

@@ -21,6 +21,7 @@ interface ControlCardProps {
   isConnected: boolean;
   onAction?: (desired: 'muted' | 'unmuted') => void;
   onCameraAction?: (desired: 'on' | 'off') => void;
+  onHandAction?: (desired: 'raised' | 'lowered') => void;
   isActionPending?: boolean;
 }
 
@@ -30,12 +31,14 @@ export const ControlCard: React.FC<ControlCardProps> = ({
   isConnected,
   onAction,
   onCameraAction,
+  onHandAction,
   isActionPending = false,
 }) => {
   const { value, confidence, capability } = snapshot;
 
   const isMic = type === 'microphone';
   const isCamera = type === 'camera';
+  const isHand = type === 'hand';
 
   const isMicActionable =
     isMic &&
@@ -51,7 +54,14 @@ export const ControlCard: React.FC<ControlCardProps> = ({
     confidence === 'confirmed' &&
     (value === 'on' || value === 'off');
 
-  const isPending = (isMic || isCamera) && isActionPending;
+  const isHandActionable =
+    isHand &&
+    isConnected &&
+    (capability === 'observe-only' || capability === 'verified') &&
+    confidence === 'confirmed' &&
+    (value === 'raised' || value === 'lowered');
+
+  const isPending = (isMic || isCamera || isHand) && isActionPending;
 
   // Determine state labels and icons
   let title = '';
@@ -137,8 +147,10 @@ export const ControlCard: React.FC<ControlCardProps> = ({
   } else if (isPending) {
     if (isMic) {
       subtext = value === 'muted' ? 'Sending unmute command to Teams...' : 'Sending mute command to Teams...';
-    } else {
+    } else if (isCamera) {
       subtext = value === 'off' ? 'Sending camera-on command to Teams...' : 'Sending camera-off command to Teams...';
+    } else {
+      subtext = value === 'lowered' ? 'Sending raise hand command to Teams...' : 'Sending lower hand command to Teams...';
     }
   } else if (confidence === 'stale') {
     subtext = 'State observation is stale — please refresh';
@@ -152,16 +164,20 @@ export const ControlCard: React.FC<ControlCardProps> = ({
         ? 'Camera action-eligible — tap to turn on and verify control'
         : 'Camera action-eligible — tap to turn off and verify control';
     }
-  } else if (type === 'hand') {
-    if (confidence === 'confirmed') {
-      subtext = 'Raise hand observation active (Phase 5A spike) — control disabled';
+  } else if (isHandActionable) {
+    if (capability === 'verified') {
+      subtext = value === 'lowered' ? 'Tap below to raise hand' : 'Tap below to lower hand';
     } else {
-      subtext = 'Raise hand observation waiting for Teams meeting state';
+      subtext = value === 'lowered'
+        ? 'Raise hand action-eligible — tap to raise and verify control'
+        : 'Raise hand action-eligible — tap to lower and verify control';
     }
   } else if (isMic) {
     subtext = 'Microphone control waiting for verified Teams meeting state';
   } else if (isCamera) {
     subtext = 'Camera control waiting for confirmed Teams meeting state';
+  } else if (isHand) {
+    subtext = 'Raise hand control waiting for confirmed Teams meeting state';
   } else {
     subtext = 'Remote control disabled';
   }
@@ -182,12 +198,12 @@ export const ControlCard: React.FC<ControlCardProps> = ({
         </div>
 
         {/* Phase / Capability Badge */}
-        {((isMic && capability === 'verified') || (isCamera && capability === 'verified')) ? (
+        {((isMic && capability === 'verified') || (isCamera && capability === 'verified') || (isHand && capability === 'verified')) ? (
           <div className="active-verified-badge" title="Remote control active & verified">
             <CheckCircle size={12} />
             <span>Remote Active</span>
           </div>
-        ) : ((isCamera || type === 'hand') && capability === 'observe-only') ? (
+        ) : ((isCamera || isHand) && capability === 'observe-only') ? (
           <div className="phase-observe-badge" title={`${title} capability: observe-only`}>
             <Lock size={12} />
             <span>Observe-Only</span>
@@ -309,6 +325,61 @@ export const ControlCard: React.FC<ControlCardProps> = ({
             aria-disabled="true"
             className="card-action-btn disabled-btn touch-target"
             data-testid="camera-action-disabled"
+          >
+            <Lock size={14} />
+            <span>
+              {!isConnected
+                ? 'Disconnected'
+                : capability === 'unavailable'
+                ? 'Unavailable'
+                : confidence === 'stale'
+                ? 'State Stale (Refresh)'
+                : 'Control Unavailable'}
+            </span>
+          </button>
+        )
+      ) : isHand ? (
+        isPending ? (
+          <button
+            type="button"
+            disabled={true}
+            aria-disabled="true"
+            aria-busy="true"
+            className="card-action-btn pending-btn touch-target"
+            data-testid="hand-action-pending"
+          >
+            <Loader2 size={18} className="spin-icon" />
+            <span>{value === 'lowered' ? 'Raising Hand...' : 'Lowering Hand...'}</span>
+          </button>
+        ) : isHandActionable ? (
+          value === 'lowered' ? (
+            <button
+              type="button"
+              className="card-action-btn action-unmute touch-target"
+              data-testid="hand-action-raise"
+              onClick={() => onHandAction?.('raised')}
+            >
+              <Hand size={18} />
+              <span>Raise Hand</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="card-action-btn action-mute touch-target"
+              data-testid="hand-action-lower"
+              onClick={() => onHandAction?.('lowered')}
+            >
+              <Hand size={18} />
+              <span>Lower Hand</span>
+            </button>
+          )
+        ) : (
+          <button
+            type="button"
+            disabled={true}
+            aria-disabled="true"
+            className="card-action-btn disabled-btn touch-target"
+            data-testid="hand-action-disabled"
           >
             <Lock size={14} />
             <span>

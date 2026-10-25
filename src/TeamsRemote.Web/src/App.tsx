@@ -16,9 +16,11 @@ export const App: React.FC = () => {
     echoLog,
     isMicActionPending,
     isCameraActionPending,
+    isHandActionPending,
     showCameraSafetyModal,
     setMicrophoneState,
     setCameraState,
+    setHandState,
     confirmCameraSafety,
     cancelCameraSafety,
     startPairing,
@@ -78,6 +80,8 @@ export const App: React.FC = () => {
                 type="hand"
                 snapshot={state.controls.hand}
                 isConnected={state.connection === 'connected'}
+                onHandAction={setHandState}
+                isActionPending={isHandActionPending}
               />
             </section>
           </div>

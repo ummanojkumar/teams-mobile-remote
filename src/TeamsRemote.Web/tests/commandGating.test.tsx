@@ -4,22 +4,22 @@ import { ControlCard } from '../src/components/ControlCard';
 import { TransportClient } from '../src/services/transport';
 import { ProtocolErrorCodes } from '../src/types';
 
-describe('Strict Hand Command Gating (Phase 4C)', () => {
+describe('Command Gating & Security Constraints', () => {
   const dummyHandSnapshot = {
     value: 'lowered' as const,
     capability: 'unavailable' as const,
     confidence: 'unknown' as const,
   };
 
-  it('renders "Not enabled yet" badge and button label on Hand control card', () => {
+  it('renders "Not enabled yet" badge and "Unavailable" disabled button when Hand is unavailable', () => {
     render(<ControlCard type="hand" snapshot={dummyHandSnapshot} isConnected={true} />);
-    const notEnabledElements = screen.getAllByText('Not enabled yet');
-    expect(notEnabledElements.length).toBe(2);
+    expect(screen.getByText('Not enabled yet')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Unavailable/i })).toBeDisabled();
   });
 
-  it('ensures hand control button has disabled and aria-disabled="true" attributes', () => {
+  it('ensures hand control button has disabled and aria-disabled="true" attributes when unavailable', () => {
     render(<ControlCard type="hand" snapshot={dummyHandSnapshot} isConnected={true} />);
-    const button = screen.getByRole('button', { name: /Not enabled yet/i });
+    const button = screen.getByRole('button', { name: /Unavailable/i });
 
     expect(button).toBeDisabled();
     expect(button).toHaveAttribute('aria-disabled', 'true');
@@ -33,7 +33,7 @@ describe('Strict Hand Command Gating (Phase 4C)', () => {
       </div>
     );
 
-    const button = screen.getByRole('button', { name: /Not enabled yet/i });
+    const button = screen.getByRole('button', { name: /Unavailable/i });
     fireEvent.click(button);
 
     // Button itself is disabled so click shouldn't trigger command logic
@@ -50,7 +50,7 @@ describe('Strict Hand Command Gating (Phase 4C)', () => {
     expect(screen.getByRole('button', { name: /Unavailable/i })).toBeDisabled();
   });
 
-  it('transport client explicitly blocks hand remote control commands with UNSUPPORTED_IN_PHASE_4A', () => {
+  it('transport client explicitly blocks unknown remote control commands', () => {
     const transport = new TransportClient({
       onStatusChange: vi.fn(),
       onStateSnapshot: vi.fn(),
@@ -60,8 +60,8 @@ describe('Strict Hand Command Gating (Phase 4C)', () => {
       onError: vi.fn(),
     });
 
-    expect(() => transport.sendCommand('set_hand', 'lowered')).toThrow(
-      ProtocolErrorCodes.UnsupportedInPhase4A
+    expect(() => transport.sendCommand('set_reaction', 'heart')).toThrow(
+      "Remote Teams control 'set_reaction' is not supported."
     );
   });
 });
