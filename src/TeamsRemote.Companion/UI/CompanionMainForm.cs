@@ -85,6 +85,18 @@ public sealed class CompanionMainForm : Form
             {
                 UpdateUiFromState();
             }
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await _connectionClient.SendStateSnapshotAsync();
+                }
+                catch
+                {
+                    // Ignore transient transport failures
+                }
+            });
         };
 
         _pairingService.DevicePairingChanged += () =>

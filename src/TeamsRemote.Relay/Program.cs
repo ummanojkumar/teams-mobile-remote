@@ -43,6 +43,13 @@ public class Program
                                 var session = new RelaySession(webSocket, SessionType.Companion);
                                 routeManager.RegisterSession(session);
 
+                                string? companionDeviceIdStr = context.Request.Query["deviceId"];
+                                string? companionToken = context.Request.Query["token"];
+                                if (Guid.TryParse(companionDeviceIdStr, out var compDevId) && !string.IsNullOrEmpty(companionToken))
+                                {
+                                    routeManager.RegisterCompanionRoute(session, compDevId, companionToken);
+                                }
+
                                 try
                                 {
                                     await HandleSessionLoopAsync(session, routeManager, context.RequestAborted);
@@ -58,6 +65,13 @@ public class Program
                                 using var webSocket = await context.WebSockets.AcceptWebSocketAsync();
                                 var session = new RelaySession(webSocket, SessionType.Client);
                                 routeManager.RegisterSession(session);
+
+                                string? deviceIdStr = context.Request.Query["deviceId"];
+                                string? token = context.Request.Query["token"];
+                                if (Guid.TryParse(deviceIdStr, out var devId) && !string.IsNullOrEmpty(token))
+                                {
+                                    routeManager.TryResumeClientSession(session, devId, token);
+                                }
 
                                 try
                                 {

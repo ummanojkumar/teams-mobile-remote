@@ -11,6 +11,7 @@ import {
   type ConnectionStatus,
   type PairedCredentials,
 } from '../types';
+import { normalizeRelayUrl } from './pairing';
 
 export interface TransportEvents {
   onStatusChange: (status: ConnectionStatus) => void;
@@ -43,6 +44,14 @@ export class TransportClient {
     this.credentials = creds;
   }
 
+  getCredentials(): PairedCredentials | null {
+    return this.credentials;
+  }
+
+  getRelayUrl(): string {
+    return this.credentials?.relayUrl || '';
+  }
+
   hasValidCredentials(): boolean {
     return !!(
       this.credentials &&
@@ -57,9 +66,15 @@ export class TransportClient {
     this.cleanupSocket();
 
     // Production safety enforcement: ensure wss:// if page is https:
-    let finalUrl = relayUrl.trim();
+    let finalUrl = normalizeRelayUrl(relayUrl);
     if (typeof window !== 'undefined' && window.location.protocol === 'https:' && finalUrl.startsWith('ws://')) {
       finalUrl = finalUrl.replace('ws://', 'wss://');
+    }
+
+    // If client holds valid pairing credentials, pass deviceId and token for immediate session resumption
+    if (this.hasValidCredentials() && this.credentials) {
+      const sep = finalUrl.includes('?') ? '&' : '?';
+      finalUrl += `${sep}deviceId=${encodeURIComponent(this.credentials.deviceId)}&token=${encodeURIComponent(this.credentials.sessionToken)}`;
     }
 
     this.setStatus(this.reconnectAttempt > 0 ? 'reconnecting' : 'connecting');

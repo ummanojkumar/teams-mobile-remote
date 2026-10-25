@@ -152,7 +152,12 @@ export function formatShortCode(code: string): string {
 }
 
 export function normalizeRelayUrl(url: string): string {
-  let normalized = url.trim();
+  let normalized = (url || '').trim();
+  if (!normalized) {
+    return typeof window !== 'undefined' && window.location.hostname === 'localhost'
+      ? 'ws://127.0.0.1:5100/ws/client'
+      : 'wss://' + (typeof window !== 'undefined' ? window.location.host : 'relay.example.com') + '/ws/client';
+  }
 
   // In production, enforce wss://
   if (typeof window !== 'undefined' && window.location.protocol === 'https:' && normalized.startsWith('ws://')) {

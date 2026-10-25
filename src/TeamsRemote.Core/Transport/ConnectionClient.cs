@@ -61,8 +61,19 @@ public sealed class ConnectionClient : IAsyncDisposable
                 _webSocket?.Dispose();
                 _webSocket = new ClientWebSocket();
 
-                LogMessage?.Invoke($"Connecting outbound to relay at {_relayUri}...");
-                await _webSocket.ConnectAsync(_relayUri, cancellationToken);
+                var targetUri = _relayUri;
+                if (_pairingService?.ActiveDevice is { } active)
+                {
+                    var uriBuilder = new UriBuilder(_relayUri);
+                    var query = $"deviceId={Uri.EscapeDataString(active.DeviceId.ToString())}&token={Uri.EscapeDataString(active.SessionToken)}";
+                    uriBuilder.Query = string.IsNullOrEmpty(uriBuilder.Query) || uriBuilder.Query == "?"
+                        ? query
+                        : $"{uriBuilder.Query.TrimStart('?')}&{query}";
+                    targetUri = uriBuilder.Uri;
+                }
+
+                LogMessage?.Invoke($"Connecting outbound to relay at {targetUri}...");
+                await _webSocket.ConnectAsync(targetUri, cancellationToken);
 
                 SetStatus(ConnectionStatus.Connected);
                 LogMessage?.Invoke("Successfully connected outbound to relay.");
@@ -196,6 +207,12 @@ public sealed class ConnectionClient : IAsyncDisposable
             // Process command through CommandProcessor (authorization, dedupe, rate-limits, safety)
             var responseEnvelope = _commandProcessor.ProcessEnvelope(envelope);
             await SendEnvelopeAsync(responseEnvelope, cancellationToken);
+
+            var cmdPayload = envelope.DeserializePayload<CommandPayload>();
+            if (cmdPayload?.Command == "query_state")
+            {
+                await SendStateSnapshotAsync(cancellationToken);
+            }
         }
     }
 
@@ -237,10 +254,11 @@ public sealed class ConnectionClient : IAsyncDisposable
             ObservedAt = DateTimeOffset.UtcNow
         };
 
+        var deviceId = _pairingService?.ActiveDeviceId ?? Guid.Empty;
         var envelope = ProtocolEnvelope.Create(
             ProtocolMessageType.StateSnapshot,
             snapshot,
-            Guid.Empty);
+            deviceId);
 
         await SendEnvelopeAsync(envelope, cancellationToken);
     }

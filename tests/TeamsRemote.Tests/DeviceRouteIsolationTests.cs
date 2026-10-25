@@ -327,4 +327,77 @@ public sealed class DeviceRouteIsolationTests
         // Dev1 route is now cleared because 1 active device limit is enforced
         Assert.False(await manager.RouteMessageAsync(client1, env1));
     }
+
+    [Fact]
+    public async Task TryResumeClientSession_PreservesRouteAcrossClientDisconnect_AndResumes()
+    {
+        var manager = new DeviceRouteManager();
+        var compSession = new RelaySession(new MockWebSocket(), SessionType.Companion);
+        manager.RegisterSession(compSession);
+
+        var client1 = new RelaySession(new MockWebSocket(), SessionType.Client);
+        manager.RegisterSession(client1);
+
+        var ch = new PairChallengePayload
+        {
+            ChallengeId = Guid.NewGuid(),
+            ShortCode = "333-333",
+            ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(60)
+        };
+        manager.RegisterChallenge(ch, compSession.SessionId);
+        await manager.ProcessPairRequestAsync(client1, new PairRequestPayload { ChallengeId = ch.ChallengeId, ShortCode = "333-333" });
+
+        var devId = Guid.NewGuid();
+        var token = "token_resumption_123";
+        await manager.ProcessPairApproveAsync(compSession, new PairApprovePayload
+        {
+            ChallengeId = ch.ChallengeId,
+            Approved = true,
+            DeviceId = devId,
+            SessionToken = token
+        });
+
+        // 1. Client 1 sends command successfully
+        var env = ProtocolEnvelope.Create(ProtocolMessageType.Command, new CommandPayload { Command = "query_state" }, devId);
+        Assert.True(await manager.RouteMessageAsync(client1, env));
+
+        // 2. Client 1 disconnects (simulating browser refresh / temporary socket close)
+        manager.UnregisterSession(client1.SessionId);
+
+        // 3. New client session connects (tab refreshed)
+        var client2 = new RelaySession(new MockWebSocket(), SessionType.Client);
+        manager.RegisterSession(client2);
+
+        // Resume with invalid token fails
+        Assert.False(manager.TryResumeClientSession(client2, devId, "wrong_token"));
+
+        // Resume with valid token succeeds
+        Assert.True(manager.TryResumeClientSession(client2, devId, token));
+
+        // 4. Client 2 can immediately route messages for the paired device
+        Assert.True(await manager.RouteMessageAsync(client2, env));
+    }
+
+    [Fact]
+    public async Task RegisterCompanionRoute_RestoresRouteAcrossCompanionRestart()
+    {
+        var manager = new DeviceRouteManager();
+        var compSession = new RelaySession(new MockWebSocket(), SessionType.Companion);
+        manager.RegisterSession(compSession);
+
+        var devId = Guid.NewGuid();
+        var token = "token_comp_persisted";
+
+        // Companion registers persisted route
+        Assert.True(manager.RegisterCompanionRoute(compSession, devId, token));
+
+        // Client connects and resumes session
+        var clientSession = new RelaySession(new MockWebSocket(), SessionType.Client);
+        manager.RegisterSession(clientSession);
+        Assert.True(manager.TryResumeClientSession(clientSession, devId, token));
+
+        // Can route command from client to companion
+        var env = ProtocolEnvelope.Create(ProtocolMessageType.Command, new CommandPayload { Command = "query_state" }, devId);
+        Assert.True(await manager.RouteMessageAsync(clientSession, env));
+    }
 }

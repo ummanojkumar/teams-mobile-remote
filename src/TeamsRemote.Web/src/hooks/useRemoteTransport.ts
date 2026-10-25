@@ -3,6 +3,7 @@ import { PairingStorage, type ParsedChallenge } from '../services/pairing';
 import { TransportClient } from '../services/transport';
 import {
   type CommandResultPayload,
+  type ControlSnapshotItem,
   INITIAL_REMOTE_STATE,
   type PairedCredentials,
   type PairApprovePayload,
@@ -57,7 +58,30 @@ export function useRemoteTransport() {
       ]);
     }
 
-    if (result.stateRevision !== undefined) {
+    if (result.state && (result.state.microphone || result.state.meeting || result.state.confidence)) {
+      const micVal = result.state.microphone as ControlSnapshotItem['value'] | undefined;
+      const confVal = result.state.confidence as ControlSnapshotItem['confidence'] | undefined;
+      const meetingVal = result.state.meeting;
+      const normalizedMeeting: RemoteState['meetingStatus'] =
+        meetingVal === 'active' || meetingVal === 'none' ? meetingVal : 'unknown';
+
+      setState((prev: RemoteState) => ({
+        ...prev,
+        stateRevision: result.stateRevision ?? prev.stateRevision,
+        observedAt: result.observedAt || prev.observedAt || new Date().toISOString(),
+        meetingStatus: meetingVal !== undefined ? normalizedMeeting : prev.meetingStatus,
+        controls: {
+          ...prev.controls,
+          microphone: micVal
+            ? {
+                value: micVal,
+                confidence: confVal || 'confirmed',
+                capability: 'verified',
+              }
+            : prev.controls.microphone,
+        },
+      }));
+    } else if (result.stateRevision !== undefined) {
       setState((prev: RemoteState) => ({
         ...prev,
         stateRevision: result.stateRevision ?? prev.stateRevision,
@@ -71,7 +95,7 @@ export function useRemoteTransport() {
       const creds: PairedCredentials = {
         deviceId: response.deviceId,
         sessionToken: response.sessionToken || '',
-        relayUrl: transportRef.current ? (transportRef.current as unknown as { credentials?: PairedCredentials })?.credentials?.relayUrl || '' : '',
+        relayUrl: transportRef.current?.getRelayUrl() || 'ws://127.0.0.1:5100/ws/client',
         pairedAt: new Date().toISOString(),
       };
 

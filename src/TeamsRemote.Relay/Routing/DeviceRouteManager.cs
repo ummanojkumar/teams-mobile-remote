@@ -7,7 +7,7 @@ public sealed class DeviceRouteManager
 {
     private record EphemeralChallenge(PairChallengePayload Challenge, Guid CompanionSessionId);
     private record PendingPairRequest(Guid ClientSessionId, Guid CompanionSessionId, DateTimeOffset RequestedAt);
-    private record ActiveRoute(Guid ClientSessionId, Guid CompanionSessionId, string SessionToken);
+    private record ActiveRoute(Guid? ClientSessionId, Guid CompanionSessionId, string SessionToken);
 
     private readonly Dictionary<Guid, RelaySession> _sessions = new();
     private readonly Dictionary<Guid, EphemeralChallenge> _challenges = new();
@@ -29,15 +29,27 @@ public sealed class DeviceRouteManager
         {
             _sessions.Remove(sessionId);
 
-            // Clean up any routes referencing this session
-            var deadRoutes = _routes
-                .Where(r => r.Value.ClientSessionId == sessionId || r.Value.CompanionSessionId == sessionId)
+            // Clean up routes if companion session disconnected
+            var companionDeadRoutes = _routes
+                .Where(r => r.Value.CompanionSessionId == sessionId)
                 .Select(r => r.Key)
                 .ToList();
 
-            foreach (var devId in deadRoutes)
+            foreach (var devId in companionDeadRoutes)
             {
                 _routes.Remove(devId);
+            }
+
+            // Detach client session if client disconnected, preserving route for reconnect
+            var clientDetachedRoutes = _routes
+                .Where(r => r.Value.ClientSessionId == sessionId)
+                .Select(r => r.Key)
+                .ToList();
+
+            foreach (var devId in clientDetachedRoutes)
+            {
+                var route = _routes[devId];
+                _routes[devId] = route with { ClientSessionId = null };
             }
 
             // Clean up challenges referencing this companion session
@@ -61,6 +73,47 @@ public sealed class DeviceRouteManager
             {
                 _pendingPairRequests.Remove(chId);
             }
+        }
+    }
+
+    public bool TryResumeClientSession(RelaySession clientSession, Guid deviceId, string sessionToken)
+    {
+        lock (_lock)
+        {
+            if (!_routes.TryGetValue(deviceId, out var route))
+            {
+                return false;
+            }
+
+            if (!string.Equals(route.SessionToken, sessionToken, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            // Re-bind the new client session to the active companion route
+            _routes[deviceId] = route with { ClientSessionId = clientSession.SessionId };
+            clientSession.PairedDeviceId = deviceId;
+            return true;
+        }
+    }
+
+    public bool RegisterCompanionRoute(RelaySession companionSession, Guid deviceId, string sessionToken)
+    {
+        lock (_lock)
+        {
+            if (_routes.TryGetValue(deviceId, out var existing))
+            {
+                if (!string.Equals(existing.SessionToken, sessionToken, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+                _routes[deviceId] = existing with { CompanionSessionId = companionSession.SessionId };
+            }
+            else
+            {
+                _routes[deviceId] = new ActiveRoute(null, companionSession.SessionId, sessionToken);
+            }
+            return true;
         }
     }
 
@@ -233,16 +286,16 @@ public sealed class DeviceRouteManager
                 {
                     // Broadcast to paired client if only 1 active route
                     var companionRoute = _routes.Values.FirstOrDefault(r => r.CompanionSessionId == sender.SessionId);
-                    if (companionRoute != null)
+                    if (companionRoute?.ClientSessionId is { } clientSessionId)
                     {
-                        _sessions.TryGetValue(companionRoute.ClientSessionId, out destination);
+                        _sessions.TryGetValue(clientSessionId, out destination);
                     }
                 }
                 else if (_routes.TryGetValue(envelope.DeviceId, out var route))
                 {
-                    if (route.CompanionSessionId == sender.SessionId)
+                    if (route.CompanionSessionId == sender.SessionId && route.ClientSessionId is { } clientSessionId)
                     {
-                        _sessions.TryGetValue(route.ClientSessionId, out destination);
+                        _sessions.TryGetValue(clientSessionId, out destination);
                     }
                 }
             }
@@ -265,7 +318,10 @@ public sealed class DeviceRouteManager
         {
             if (_routes.TryGetValue(deviceId, out var route))
             {
-                _sessions.TryGetValue(route.ClientSessionId, out clientSession);
+                if (route.ClientSessionId is { } clientSessionId)
+                {
+                    _sessions.TryGetValue(clientSessionId, out clientSession);
+                }
                 _routes.Remove(deviceId);
             }
         }

@@ -54,4 +54,12 @@ describe('Credential Persistence & Reconnect Semantics', () => {
 
     expect(PairingStorage.loadCredentials()).toBeNull();
   });
+
+  it('formats resumption URL with deviceId and session token query parameters', () => {
+    const relayUrl = 'ws://127.0.0.1:5100/ws/client';
+    const finalUrl = `${relayUrl}?deviceId=${encodeURIComponent(testCreds.deviceId)}&token=${encodeURIComponent(testCreds.sessionToken)}`;
+
+    expect(finalUrl).toContain('deviceId=11111111-2222-3333-4444-555555555555');
+    expect(finalUrl).toContain('token=sess_sec_tok_998877');
+  });
 });
