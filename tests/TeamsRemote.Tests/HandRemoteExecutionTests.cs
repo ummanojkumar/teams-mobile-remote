@@ -246,7 +246,7 @@ public class HandRemoteExecutionTests
 
         Assert.NotNull(payload);
         Assert.Equal("state_uncertain", payload.Status);
-        Assert.Equal("STATE_UNKNOWN", payload.ErrorCode);
+        Assert.Equal(ProtocolErrorCodes.StateUnknown, payload.ErrorCode);
         Assert.Equal(0, mockController.SetHandCallCount);
     }
 
@@ -349,5 +349,61 @@ public class HandRemoteExecutionTests
         Assert.True(changed);
         Assert.Equal(ControlCapabilityTier.ObserveOnly, stateStore.HandCapability);
         Assert.Equal(revBeforeReset + 1, stateStore.StateRevision);
+    }
+
+    [Fact]
+    public async Task SetHand_Deduplication_ReturnsCachedResultWithoutReinvoking()
+    {
+        var stateStore = new MeetingStateStore();
+        stateStore.UpdateObserved(
+            micState: TeamsControlState.Muted,
+            cameraState: TeamsControlState.Off,
+            handState: TeamsControlState.Lowered,
+            isConfirmed: true,
+            meetingStatus: "active",
+            handCapability: ControlCapabilityTier.ObserveOnly,
+            handConfidence: StateConfidence.Confirmed);
+
+        var devId = Guid.NewGuid();
+        var mockController = new MockTeamsController
+        {
+            StatusToReturn = CommandExecutionStatus.Confirmed,
+            FinalStateToReturn = TeamsControlState.Raised,
+            ReasonToReturn = "Hand raised successfully.",
+            PromoteToVerifiedToReturn = true
+        };
+        var processor = new CommandProcessor(stateStore, () => devId, mockController);
+
+        var msgId = Guid.NewGuid();
+        var corrId = Guid.NewGuid();
+        var env1 = ProtocolEnvelope.Create(
+            ProtocolMessageType.Command,
+            new CommandPayload { Command = "set_hand", Desired = "raised", ExpectedStateRevision = 1 },
+            devId,
+            correlationId: corrId,
+            messageId: msgId);
+
+        var res1 = await processor.ProcessEnvelopeAsync(env1);
+        Assert.Equal(1, mockController.SetHandCallCount);
+        Assert.Equal(corrId, res1.CorrelationId);
+        Assert.Equal(msgId, res1.MessageId);
+
+        // Resend identical messageId (retry simulation)
+        var env2 = ProtocolEnvelope.Create(
+            ProtocolMessageType.Command,
+            new CommandPayload { Command = "set_hand", Desired = "raised", ExpectedStateRevision = 1 },
+            devId,
+            correlationId: corrId,
+            messageId: msgId);
+
+        var res2 = await processor.ProcessEnvelopeAsync(env2);
+        Assert.Equal(1, mockController.SetHandCallCount); // Still 1: cached result returned without re-invoking!
+        Assert.Equal(corrId, res2.CorrelationId);
+        Assert.Equal(msgId, res2.MessageId);
+
+        var payload1 = res1.DeserializePayload<CommandResultPayload>();
+        var payload2 = res2.DeserializePayload<CommandResultPayload>();
+        Assert.Equal(payload1?.Status, payload2?.Status);
+        Assert.Equal(payload1?.StateRevision, payload2?.StateRevision);
     }
 }

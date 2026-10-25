@@ -95,6 +95,12 @@ export function useRemoteTransport() {
     }
     setIsCameraActionPending(false);
 
+    if (handActionTimerRef.current) {
+      clearTimeout(handActionTimerRef.current);
+      handActionTimerRef.current = null;
+    }
+    setIsHandActionPending(false);
+
     if (result.state?.echo) {
       setEchoLog((prev) => [
         {
@@ -120,6 +126,10 @@ export function useRemoteTransport() {
             ...prev.controls.camera,
             confidence: 'stale',
           },
+          hand: {
+            ...prev.controls.hand,
+            confidence: 'stale',
+          },
         },
       }));
       transportRef.current?.queryState();
@@ -137,10 +147,20 @@ export function useRemoteTransport() {
       return;
     }
 
-    if (result.state && (result.state.microphone || result.state.camera || result.state.meeting || result.state.confidence || result.state.capability)) {
+    if (
+      result.state &&
+      (result.state.microphone ||
+        result.state.camera ||
+        result.state.hand ||
+        result.state.meeting ||
+        result.state.confidence ||
+        result.state.capability)
+    ) {
       const micVal = result.state.microphone as ControlSnapshotItem['value'] | undefined;
       const camVal = result.state.camera as ControlSnapshotItem['value'] | undefined;
-      const camCap = result.state.capability as ControlSnapshotItem['capability'] | undefined;
+      const handVal = result.state.hand as ControlSnapshotItem['value'] | undefined;
+      const camCap = (result.state.camera_capability || (result.state.camera ? result.state.capability : undefined)) as ControlSnapshotItem['capability'] | undefined;
+      const handCap = (result.state.hand_capability || (result.state.hand ? result.state.capability : undefined)) as ControlSnapshotItem['capability'] | undefined;
       const confVal = result.state.confidence as ControlSnapshotItem['confidence'] | undefined;
       const meetingVal = result.state.meeting;
       const normalizedMeeting: RemoteState['meetingStatus'] =
@@ -168,6 +188,13 @@ export function useRemoteTransport() {
                 capability: camCap || prev.controls.camera.capability,
               }
             : prev.controls.camera,
+          hand: handVal
+            ? {
+                value: handVal,
+                confidence: confVal || 'confirmed',
+                capability: handCap || prev.controls.hand.capability,
+              }
+            : prev.controls.hand,
         },
       }));
     } else if (result.stateRevision !== undefined) {
@@ -359,11 +386,15 @@ export function useRemoteTransport() {
         typeof crypto !== 'undefined' && crypto.randomUUID
           ? crypto.randomUUID()
           : 'msg_' + Date.now();
+      const correlationId =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : 'corr_' + Date.now();
       transportRef.current.sendSetMicrophone(
         desired,
         state.stateRevision,
         messageId,
-        messageId
+        correlationId
       );
     },
     [
@@ -424,11 +455,15 @@ export function useRemoteTransport() {
         typeof crypto !== 'undefined' && crypto.randomUUID
           ? crypto.randomUUID()
           : 'msg_' + Date.now();
+      const correlationId =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : 'corr_' + Date.now();
       transportRef.current.sendSetCamera(
         desired,
         state.stateRevision,
         messageId,
-        messageId
+        correlationId
       );
     },
     [
@@ -517,11 +552,15 @@ export function useRemoteTransport() {
         typeof crypto !== 'undefined' && crypto.randomUUID
           ? crypto.randomUUID()
           : 'msg_' + Date.now();
+      const correlationId =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : 'corr_' + Date.now();
       transportRef.current.sendSetHand(
         desired,
         state.stateRevision,
         messageId,
-        messageId
+        correlationId
       );
     },
     [

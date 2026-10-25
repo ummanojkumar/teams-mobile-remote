@@ -485,7 +485,7 @@ public sealed class CommandProcessor
                     {
                         Status = "state_uncertain",
                         StateRevision = handRev,
-                        ErrorCode = "STATE_UNKNOWN",
+                        ErrorCode = ProtocolErrorCodes.StateUnknown,
                         Reason = "Current hand state is unknown or unavailable. Action prohibited to prevent unsafe toggling."
                     };
                     break;
