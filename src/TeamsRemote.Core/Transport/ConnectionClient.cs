@@ -205,11 +205,11 @@ public sealed class ConnectionClient : IAsyncDisposable
         if (envelope.Type == ProtocolMessageType.Command)
         {
             // Process command through CommandProcessor (authorization, dedupe, rate-limits, safety)
-            var responseEnvelope = _commandProcessor.ProcessEnvelope(envelope);
+            var responseEnvelope = await _commandProcessor.ProcessEnvelopeAsync(envelope, cancellationToken);
             await SendEnvelopeAsync(responseEnvelope, cancellationToken);
 
             var cmdPayload = envelope.DeserializePayload<CommandPayload>();
-            if (cmdPayload?.Command == "query_state")
+            if (cmdPayload?.Command == "query_state" || cmdPayload?.Command == "set_microphone")
             {
                 await SendStateSnapshotAsync(cancellationToken);
             }

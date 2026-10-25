@@ -198,14 +198,14 @@ public sealed class RelayTransportIntegrationTests
 
         await ReceiveEnvelopeAsync(clientWs, cts.Token); // PairResponse
 
-        // Client attempts remote set_microphone command
-        var micCmd = new CommandPayload
+        // Client attempts remote set_camera command (strictly unsupported in Phase 4A)
+        var cameraCmd = new CommandPayload
         {
-            Command = "set_microphone",
-            Desired = "muted"
+            Command = "set_camera",
+            Desired = "on"
         };
-        var micCmdEnv = ProtocolEnvelope.Create(ProtocolMessageType.Command, micCmd, record.DeviceId);
-        await SendEnvelopeAsync(clientWs, micCmdEnv, cts.Token);
+        var cameraCmdEnv = ProtocolEnvelope.Create(ProtocolMessageType.Command, cameraCmd, record.DeviceId);
+        await SendEnvelopeAsync(clientWs, cameraCmdEnv, cts.Token);
 
         // Companion receives and validates via CommandProcessor
         var receivedCmd = await ReceiveEnvelopeAsync(companionWs, cts.Token);
@@ -218,7 +218,7 @@ public sealed class RelayTransportIntegrationTests
 
         Assert.NotNull(payload);
         Assert.Equal("unsupported", payload.Status);
-        Assert.Equal(ProtocolErrorCodes.UnsupportedInPhase2, payload.ErrorCode);
+        Assert.Equal(ProtocolErrorCodes.UnsupportedInPhase4A, payload.ErrorCode);
     }
 
     [Fact]

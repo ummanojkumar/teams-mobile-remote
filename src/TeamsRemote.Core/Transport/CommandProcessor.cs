@@ -1,3 +1,5 @@
+using TeamsRemote.Core.Abstractions;
+using TeamsRemote.Core.Models;
 using TeamsRemote.Core.Protocol;
 using TeamsRemote.Core.State;
 
@@ -9,20 +11,30 @@ public sealed class CommandProcessor
     private readonly CommandDeduplicator _deduplicator;
     private readonly CommandRateLimiter _rateLimiter;
     private readonly Func<Guid?> _getActiveDeviceIdFunc;
+    private readonly ITeamsController? _teamsController;
 
     public CommandProcessor(
         MeetingStateStore stateStore,
         Func<Guid?> getActiveDeviceIdFunc,
+        ITeamsController? teamsController = null,
         CommandDeduplicator? deduplicator = null,
         CommandRateLimiter? rateLimiter = null)
     {
         _stateStore = stateStore;
         _getActiveDeviceIdFunc = getActiveDeviceIdFunc;
+        _teamsController = teamsController;
         _deduplicator = deduplicator ?? new CommandDeduplicator();
         _rateLimiter = rateLimiter ?? new CommandRateLimiter();
     }
 
     public ProtocolEnvelope ProcessEnvelope(ProtocolEnvelope envelope)
+    {
+        return ProcessEnvelopeAsync(envelope).GetAwaiter().GetResult();
+    }
+
+    public async Task<ProtocolEnvelope> ProcessEnvelopeAsync(
+        ProtocolEnvelope envelope,
+        CancellationToken cancellationToken = default)
     {
         // 1. Version validation
         if (envelope.Version != ProtocolEnvelope.CurrentVersion)
@@ -135,13 +147,162 @@ public sealed class CommandProcessor
                 break;
 
             case "set_microphone":
-                // Phase 2 constraint: Remote microphone commands remain strictly disabled
+                var targetDesired = cmdPayload.Desired?.Trim().ToLowerInvariant();
+                if (targetDesired != "muted" && targetDesired != "unmuted")
+                {
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "rejected",
+                        StateRevision = _stateStore.StateRevision,
+                        ErrorCode = ProtocolErrorCodes.InvalidDesiredState,
+                        Reason = $"Invalid desired state '{cmdPayload.Desired}'. Expected 'muted' or 'unmuted'."
+                    };
+                    break;
+                }
+
+                var (currentRev, currentMicState, curConf, curMeeting) = _stateStore.GetSnapshot();
+
+                // Safe exception: If refreshed state already equals the requested desired state,
+                // return AlreadyInDesiredState without invoking Teams.
+                if (string.Equals(currentMicState, targetDesired, StringComparison.OrdinalIgnoreCase))
+                {
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "confirmed",
+                        StateRevision = currentRev,
+                        Reason = $"Microphone is already {targetDesired}. No action needed.",
+                        State = new Dictionary<string, string>
+                        {
+                            ["microphone"] = currentMicState,
+                            ["confidence"] = curConf.ToString().ToLowerInvariant(),
+                            ["meeting"] = curMeeting
+                        }
+                    };
+                    break;
+                }
+
+                // Strict revision rule:
+                // - If lower than current: reject with STALE_COMMAND
+                if (cmdPayload.ExpectedStateRevision.HasValue && cmdPayload.ExpectedStateRevision.Value < currentRev)
+                {
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "rejected",
+                        StateRevision = currentRev,
+                        ErrorCode = ProtocolErrorCodes.StaleCommand,
+                        Reason = $"Command rejected: expected state revision {cmdPayload.ExpectedStateRevision.Value} is lower than current revision {currentRev}."
+                    };
+                    break;
+                }
+
+                // - If higher than current: reject with INVALID_STATE_REVISION
+                if (cmdPayload.ExpectedStateRevision.HasValue && cmdPayload.ExpectedStateRevision.Value > currentRev)
+                {
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "rejected",
+                        StateRevision = currentRev,
+                        ErrorCode = ProtocolErrorCodes.InvalidStateRevision,
+                        Reason = $"Command rejected: expected state revision {cmdPayload.ExpectedStateRevision.Value} is higher than current revision {currentRev}."
+                    };
+                    break;
+                }
+
+                // Exact match (or no revision specified): proceed with UIA execution
+                if (_teamsController == null)
+                {
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "unsupported",
+                        StateRevision = currentRev,
+                        ErrorCode = ProtocolErrorCodes.UnsupportedInPhase4A,
+                        Reason = "No Teams controller available to execute remote microphone command."
+                    };
+                    break;
+                }
+
+                var desiredEnum = targetDesired == "muted" ? DesiredMicrophoneState.Muted : DesiredMicrophoneState.Unmuted;
+                _stateStore.MarkPending();
+
+                try
+                {
+                    var actionResult = await _teamsController.SetMicrophoneStateAsync(desiredEnum, cancellationToken);
+                    switch (actionResult.Status)
+                    {
+                        case CommandExecutionStatus.Confirmed:
+                        case CommandExecutionStatus.AlreadyInDesiredState:
+                            _stateStore.UpdateObserved(actionResult.FinalState, isConfirmed: true, meetingStatus: "active");
+                            var (newRev, newMic, newConf, newMeeting) = _stateStore.GetSnapshot();
+                            execResult = new CommandResultPayload
+                            {
+                                Status = "confirmed",
+                                StateRevision = newRev,
+                                Reason = actionResult.Reason,
+                                State = new Dictionary<string, string>
+                                {
+                                    ["microphone"] = newMic,
+                                    ["confidence"] = newConf.ToString().ToLowerInvariant(),
+                                    ["meeting"] = newMeeting
+                                }
+                            };
+                            break;
+
+                        case CommandExecutionStatus.TimedOut:
+                        case CommandExecutionStatus.StateUncertain:
+                            _stateStore.MarkStaleOrUncertain();
+                            execResult = new CommandResultPayload
+                            {
+                                Status = "state_uncertain",
+                                StateRevision = _stateStore.StateRevision,
+                                ErrorCode = ProtocolErrorCodes.VerificationTimedOut,
+                                Reason = actionResult.Reason
+                            };
+                            break;
+
+                        case CommandExecutionStatus.Unsupported:
+                            _stateStore.MarkStaleOrUncertain();
+                            execResult = new CommandResultPayload
+                            {
+                                Status = "unsupported",
+                                StateRevision = _stateStore.StateRevision,
+                                ErrorCode = actionResult.ErrorCode ?? ProtocolErrorCodes.ControlNotFound,
+                                Reason = actionResult.Reason
+                            };
+                            break;
+
+                        default:
+                            _stateStore.MarkStaleOrUncertain();
+                            execResult = new CommandResultPayload
+                            {
+                                Status = "failed",
+                                StateRevision = _stateStore.StateRevision,
+                                ErrorCode = actionResult.ErrorCode ?? ProtocolErrorCodes.InvokeFailed,
+                                Reason = actionResult.Reason
+                            };
+                            break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _stateStore.MarkStaleOrUncertain();
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "failed",
+                        StateRevision = _stateStore.StateRevision,
+                        ErrorCode = ProtocolErrorCodes.InvokeFailed,
+                        Reason = ex.Message
+                    };
+                }
+                break;
+
+            case "set_camera":
+            case "set_hand":
                 execResult = new CommandResultPayload
                 {
                     Status = "unsupported",
                     StateRevision = _stateStore.StateRevision,
-                    ErrorCode = ProtocolErrorCodes.UnsupportedInPhase2,
-                    Reason = "Remote microphone control is disabled in Phase 2 proof of transport. Only local companion control is permitted."
+                    ErrorCode = ProtocolErrorCodes.UnsupportedInPhase4A,
+                    Reason = $"Remote control of '{cmdPayload.Command}' is locked in Phase 4A."
                 };
                 break;
 

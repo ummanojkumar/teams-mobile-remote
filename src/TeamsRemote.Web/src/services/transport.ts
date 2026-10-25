@@ -214,17 +214,44 @@ export class TransportClient {
     return this.sendEnvelope(envelope);
   }
 
+  sendSetMicrophone(
+    desired: 'muted' | 'unmuted',
+    expectedStateRevision: number,
+    messageId?: string,
+    correlationId?: string
+  ): boolean {
+    if (!this.hasValidCredentials()) return false;
+    const msgId = messageId || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'msg_' + Date.now());
+    const corrId = correlationId || msgId;
+
+    const envelope = createEnvelope(
+      'command',
+      {
+        command: 'set_microphone',
+        desired,
+        expectedStateRevision,
+      },
+      this.getDeviceId(),
+      corrId,
+      msgId
+    );
+    return this.sendEnvelope(envelope);
+  }
+
   /**
-   * Phase 3 Constraint: Remote Teams control commands are strictly disabled.
-   * This method throws if invoked in Phase 3.
+   * Phase 4A Constraint: Camera and Hand control commands are strictly disabled.
+   * This method throws if invoked in Phase 4A.
    */
   sendRemoteControlCommand(command: string): never {
     throw new Error(
-      `Remote Teams control '${command}' is blocked in Phase 3 by UNSUPPORTED_IN_PHASE_2 constraint.`
+      `Remote Teams control '${command}' is blocked in Phase 4A by UNSUPPORTED_IN_PHASE_4A constraint.`
     );
   }
 
-  sendCommand(command: string, _desired?: string): never {
+  sendCommand(command: string, desired?: string, expectedStateRevision = 0): boolean {
+    if (command === 'set_microphone' && (desired === 'muted' || desired === 'unmuted')) {
+      return this.sendSetMicrophone(desired, expectedStateRevision);
+    }
     return this.sendRemoteControlCommand(command);
   }
 

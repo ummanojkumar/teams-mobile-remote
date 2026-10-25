@@ -53,7 +53,7 @@ public sealed class CompanionMainForm : Form
         _credentialStore = new DpapiDeviceStore();
 
         _pairingService = new PairingService(_credentialStore, ConfirmPairingDialogAsync);
-        _commandProcessor = new CommandProcessor(_stateStore, () => _pairingService.ActiveDeviceId);
+        _commandProcessor = new CommandProcessor(_stateStore, () => _pairingService.ActiveDeviceId, _controller);
         _connectionClient = new ConnectionClient(_relayUri, _commandProcessor, _stateStore, _pairingService);
 
         // Tray menu and icon

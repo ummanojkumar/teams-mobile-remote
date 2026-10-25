@@ -13,6 +13,8 @@ export const App: React.FC = () => {
   const {
     state,
     echoLog,
+    isMicActionPending,
+    setMicrophoneState,
     startPairing,
     unpair,
     testEcho,
@@ -56,6 +58,8 @@ export const App: React.FC = () => {
                 type="microphone"
                 snapshot={state.controls.microphone}
                 isConnected={state.connection === 'connected'}
+                onAction={setMicrophoneState}
+                isActionPending={isMicActionPending}
               />
               <ControlCard
                 type="camera"

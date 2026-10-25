@@ -15,11 +15,14 @@ export type ProtocolMessageType =
 
 export const ProtocolErrorCodes = {
   UnsupportedInPhase2: 'UNSUPPORTED_IN_PHASE_2',
+  UnsupportedInPhase4A: 'UNSUPPORTED_IN_PHASE_4A',
   PairingRequired: 'PAIRING_REQUIRED',
   PairingExpired: 'PAIRING_EXPIRED',
   InvalidPairingCode: 'INVALID_PAIRING_CODE',
   PairingRejected: 'PAIRING_REJECTED',
   RateLimited: 'RATE_LIMITED',
+  StaleCommand: 'STALE_COMMAND',
+  InvalidStateRevision: 'INVALID_STATE_REVISION',
   PayloadTooLarge: 'PAYLOAD_TOO_LARGE',
   UnsupportedProtocolVersion: 'UNSUPPORTED_PROTOCOL_VERSION',
   InvalidEnvelope: 'INVALID_ENVELOPE',
@@ -113,12 +116,13 @@ export function createEnvelope<T>(
   type: ProtocolMessageType,
   payload: T,
   deviceId = '00000000-0000-0000-0000-000000000000',
-  correlationId?: string
+  correlationId?: string,
+  messageId?: string
 ): ProtocolEnvelope<T> {
   return {
     version: PROTOCOL_VERSION,
     type,
-    messageId: generateUuid(),
+    messageId: messageId || generateUuid(),
     correlationId: correlationId || generateUuid(),
     deviceId,
     sentAt: new Date().toISOString(),

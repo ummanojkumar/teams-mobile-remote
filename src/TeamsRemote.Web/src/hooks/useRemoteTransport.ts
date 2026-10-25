@@ -16,11 +16,20 @@ export function useRemoteTransport() {
   const [echoLog, setEchoLog] = useState<{ text: string; time: string; status: string }[]>([]);
   const transportRef = useRef<TransportClient | null>(null);
 
+  const [isMicActionPending, setIsMicActionPending] = useState(false);
+  const micActionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const handleStatusChange = useCallback((status: RemoteState['connection']) => {
     setState((prev: RemoteState) => ({ ...prev, connection: status }));
   }, []);
 
   const handleStateSnapshot = useCallback((snapshot: StateSnapshotPayload) => {
+    if (micActionTimerRef.current) {
+      clearTimeout(micActionTimerRef.current);
+      micActionTimerRef.current = null;
+    }
+    setIsMicActionPending(false);
+
     setState((prev: RemoteState) => ({
       ...prev,
       stateRevision: snapshot.stateRevision,
@@ -47,6 +56,12 @@ export function useRemoteTransport() {
   }, []);
 
   const handleCommandResult = useCallback((result: CommandResultPayload) => {
+    if (micActionTimerRef.current) {
+      clearTimeout(micActionTimerRef.current);
+      micActionTimerRef.current = null;
+    }
+    setIsMicActionPending(false);
+
     if (result.state?.echo) {
       setEchoLog((prev) => [
         {
@@ -56,6 +71,33 @@ export function useRemoteTransport() {
         },
         ...prev.slice(0, 9),
       ]);
+    }
+
+    if (result.status === 'state_uncertain') {
+      setState((prev: RemoteState) => ({
+        ...prev,
+        errorMessage: result.reason || 'Microphone state uncertain after action.',
+        controls: {
+          ...prev.controls,
+          microphone: {
+            ...prev.controls.microphone,
+            confidence: 'stale',
+          },
+        },
+      }));
+      transportRef.current?.queryState();
+      return;
+    }
+
+    if (result.status === 'rejected') {
+      setState((prev: RemoteState) => ({
+        ...prev,
+        errorMessage: result.reason || 'Command rejected.',
+      }));
+      if (result.errorCode === 'STALE_COMMAND' || result.errorCode === 'INVALID_STATE_REVISION') {
+        transportRef.current?.queryState();
+      }
+      return;
     }
 
     if (result.state && (result.state.microphone || result.state.meeting || result.state.confidence)) {
@@ -70,6 +112,7 @@ export function useRemoteTransport() {
         stateRevision: result.stateRevision ?? prev.stateRevision,
         observedAt: result.observedAt || prev.observedAt || new Date().toISOString(),
         meetingStatus: meetingVal !== undefined ? normalizedMeeting : prev.meetingStatus,
+        errorMessage: null,
         controls: {
           ...prev.controls,
           microphone: micVal
@@ -220,6 +263,85 @@ export function useRemoteTransport() {
     transportRef.current?.queryState();
   }, []);
 
+  const setMicrophoneState = useCallback(
+    (desired: 'muted' | 'unmuted') => {
+      if (!transportRef.current) return;
+
+      // 1. Anti-double-tap: drop duplicate action if already in flight
+      if (isMicActionPending) {
+        return;
+      }
+
+      // 2. Pre-action capability and confidence gate
+      if (
+        state.connection !== 'connected' ||
+        state.controls.microphone.capability !== 'verified' ||
+        state.controls.microphone.confidence !== 'confirmed'
+      ) {
+        return;
+      }
+
+      setIsMicActionPending(true);
+
+      // Optimistically mark confidence as pending
+      setState((prev: RemoteState) => ({
+        ...prev,
+        controls: {
+          ...prev.controls,
+          microphone: {
+            ...prev.controls.microphone,
+            confidence: 'pending',
+          },
+        },
+      }));
+
+      // Bounded safety timeout (5000ms)
+      if (micActionTimerRef.current) {
+        clearTimeout(micActionTimerRef.current);
+      }
+      micActionTimerRef.current = setTimeout(() => {
+        setIsMicActionPending(false);
+        setState((prev: RemoteState) => ({
+          ...prev,
+          errorMessage: 'Microphone action timed out. Re-syncing state...',
+          controls: {
+            ...prev.controls,
+            microphone: {
+              ...prev.controls.microphone,
+              confidence: 'stale',
+            },
+          },
+        }));
+        transportRef.current?.queryState();
+      }, 5000);
+
+      const messageId =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : 'msg_' + Date.now();
+      transportRef.current.sendSetMicrophone(
+        desired,
+        state.stateRevision,
+        messageId,
+        messageId
+      );
+    },
+    [
+      isMicActionPending,
+      state.connection,
+      state.controls.microphone,
+      state.stateRevision,
+    ]
+  );
+
+  useEffect(() => {
+    return () => {
+      if (micActionTimerRef.current) {
+        clearTimeout(micActionTimerRef.current);
+      }
+    };
+  }, []);
+
   const resetPairingState = useCallback(() => {
     PairingStorage.clearCredentials();
     transportRef.current?.setCredentials(null);
@@ -235,6 +357,8 @@ export function useRemoteTransport() {
   return {
     state,
     echoLog,
+    isMicActionPending,
+    setMicrophoneState,
     startPairing,
     unpair,
     testEcho,
