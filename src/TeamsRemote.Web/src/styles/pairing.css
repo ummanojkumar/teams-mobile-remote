@@ -307,6 +307,16 @@
   color: #38bdf8;
 }
 
+.pairing-code-input {
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: 0.25em;
+  text-align: center;
+  text-transform: uppercase;
+  color: #38bdf8;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
 .form-helper {
   font-size: 0.75rem;
   color: var(--text-muted);

@@ -381,9 +381,10 @@ public sealed class CompanionMainForm : Form
             using var qrGen = new QRCodeGenerator();
             string qrPayload = JsonSerializer.Serialize(new
             {
-                challengeId = challenge.ChallengeId,
+                version = ProtocolEnvelope.CurrentVersion,
+                pairingCode = challenge.PairingCode,
                 relayUrl = challenge.RelayUrl,
-                shortCode = challenge.ShortCode,
+                shortCode = challenge.PairingCode,
                 expiresAt = challenge.ExpiresAt
             });
 
@@ -391,11 +392,10 @@ public sealed class CompanionMainForm : Form
             using var qrCode = new QRCode(qrData);
             using var qrBitmap = qrCode.GetGraphic(5);
 
-            LogMessage($"Generated single-use pairing challenge ({challenge.ShortCode}). Expires in 60s.");
-            LogMessage($"[PAIRING] Challenge ID: {challenge.ChallengeId}");
+            LogMessage($"Generated single-use pairing code ({challenge.PairingCode}). Expires in 60s.");
             LogMessage($"[PAIRING] Client Relay URL: {clientRelayUrl}");
 
-            using var qrDialog = new PairingQrDialog(qrBitmap, challenge.ShortCode, qrPayload);
+            using var qrDialog = new PairingQrDialog(qrBitmap, challenge.PairingCode, qrPayload);
             qrDialog.ShowDialog(this);
         }
         catch (Exception ex)

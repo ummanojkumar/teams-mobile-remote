@@ -32,7 +32,12 @@ describe('Pairing Flow State Machine & UI Verification', () => {
     const manualTab = screen.getByRole('button', { name: /Enter Manually/i });
     fireEvent.click(manualTab);
 
-    expect(screen.getByText('Paste QR Payload')).toBeInTheDocument();
+    expect(screen.getByText('Enter 6-Char Code')).toBeInTheDocument();
+    expect(screen.getByText('6-Character Pairing Code')).toBeInTheDocument();
+
+    const pasteTab = screen.getByRole('button', { name: /Paste QR Payload/i });
+    fireEvent.click(pasteTab);
+
     expect(screen.getByText('QR Code Payload (JSON)')).toBeInTheDocument();
   });
 

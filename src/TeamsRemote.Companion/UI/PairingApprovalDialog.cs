@@ -29,7 +29,7 @@ public sealed class PairingApprovalDialog : Form
 
         var lblCodeDesc = new Label
         {
-            Text = "Verify this confirmation code matches your phone:",
+            Text = "Verify this pairing code matches the code on your phone:",
             Location = new Point(24, 75),
             Size = new Size(360, 20),
             ForeColor = Color.FromArgb(108, 117, 125)
@@ -41,7 +41,7 @@ public sealed class PairingApprovalDialog : Form
             Location = new Point(24, 100),
             Size = new Size(360, 45),
             TextAlign = ContentAlignment.MiddleCenter,
-            Font = new Font("Segoe UI", 20f, FontStyle.Bold),
+            Font = new Font("Consolas", 22f, FontStyle.Bold),
             ForeColor = Color.FromArgb(13, 110, 253),
             BackColor = Color.FromArgb(233, 236, 239),
             BorderStyle = BorderStyle.FixedSingle

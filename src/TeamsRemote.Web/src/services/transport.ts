@@ -188,10 +188,16 @@ export class TransportClient {
     }
   }
 
-  sendPairRequest(challengeId: string, shortCode: string, deviceLabel: string): boolean {
+  sendPairRequest(challengeId: string, pairingCode: string, deviceLabel: string): boolean {
+    const code = (pairingCode || '').trim().toUpperCase();
     const envelope = createEnvelope(
       'pair_request',
-      { challengeId, shortCode, deviceLabel },
+      {
+        pairingCode: code,
+        shortCode: code,
+        deviceLabel: deviceLabel || 'Mobile Device',
+        challengeId: challengeId || '00000000-0000-0000-0000-000000000000',
+      },
       '00000000-0000-0000-0000-000000000000'
     );
     return this.sendEnvelope(envelope);

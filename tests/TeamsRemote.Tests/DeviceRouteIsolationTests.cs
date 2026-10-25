@@ -400,4 +400,118 @@ public sealed class DeviceRouteIsolationTests
         var env = ProtocolEnvelope.Create(ProtocolMessageType.Command, new CommandPayload { Command = "query_state" }, devId);
         Assert.True(await manager.RouteMessageAsync(clientSession, env));
     }
+
+    [Fact]
+    public async Task PairRequest_ResolvesByPairingCodeWithoutChallengeId()
+    {
+        var manager = new DeviceRouteManager();
+        var compSession = new RelaySession(new MockWebSocket(), SessionType.Companion);
+        manager.RegisterSession(compSession);
+
+        var clientSession = new RelaySession(new MockWebSocket(), SessionType.Client);
+        manager.RegisterSession(clientSession);
+
+        var challenge = new PairChallengePayload
+        {
+            ChallengeId = Guid.NewGuid(),
+            PairingCode = "K7M4PX",
+            ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(60)
+        };
+        manager.RegisterChallenge(challenge, compSession.SessionId);
+
+        // Client supplies ONLY the 6-character code (ChallengeId is empty)
+        var req = new PairRequestPayload
+        {
+            PairingCode = "k7m4px", // case-insensitive
+            DeviceLabel = "Mobile Device"
+        };
+
+        var (success, errorCode, reason) = await manager.ProcessPairRequestWithResultAsync(clientSession, req);
+        Assert.True(success, reason);
+        Assert.Null(errorCode);
+    }
+
+    [Fact]
+    public async Task PairRequest_WhenInvalidGuess_DoesNotConsumeActiveChallenge()
+    {
+        var manager = new DeviceRouteManager();
+        var compSession = new RelaySession(new MockWebSocket(), SessionType.Companion);
+        manager.RegisterSession(compSession);
+
+        var attacker = new RelaySession(new MockWebSocket(), SessionType.Client);
+        var legitimate = new RelaySession(new MockWebSocket(), SessionType.Client);
+        manager.RegisterSession(attacker);
+        manager.RegisterSession(legitimate);
+
+        var challenge = new PairChallengePayload
+        {
+            ChallengeId = Guid.NewGuid(),
+            PairingCode = "K7M4PX",
+            ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(60)
+        };
+        manager.RegisterChallenge(challenge, compSession.SessionId);
+
+        // Attacker guesses wrong code
+        var wrongReq = new PairRequestPayload
+        {
+            PairingCode = "WRONGX",
+            DeviceLabel = "Attacker"
+        };
+        var (attackerOk, attackerErr, _) = await manager.ProcessPairRequestWithResultAsync(attacker, wrongReq);
+        Assert.False(attackerOk);
+        Assert.Equal(ProtocolErrorCodes.InvalidPairingCode, attackerErr);
+
+        // Challenge was NOT consumed; legitimate user still redeems successfully
+        var legitimateReq = new PairRequestPayload
+        {
+            PairingCode = "K7M4PX",
+            DeviceLabel = "Legitimate Phone"
+        };
+        var (legitOk, legitErr, legitReason) = await manager.ProcessPairRequestWithResultAsync(legitimate, legitimateReq);
+        Assert.True(legitOk, legitReason);
+        Assert.Null(legitErr);
+    }
+
+    [Fact]
+    public async Task PairRequest_WhenExceedingRateLimit_ReturnsRateLimited()
+    {
+        var manager = new DeviceRouteManager();
+        var compSession = new RelaySession(new MockWebSocket(), SessionType.Companion);
+        manager.RegisterSession(compSession);
+
+        var clientSession = new RelaySession(new MockWebSocket(), SessionType.Client);
+        manager.RegisterSession(clientSession);
+
+        var challenge = new PairChallengePayload
+        {
+            ChallengeId = Guid.NewGuid(),
+            PairingCode = "K7M4PX",
+            ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(60)
+        };
+        manager.RegisterChallenge(challenge, compSession.SessionId);
+
+        // First 3 failed attempts
+        for (int i = 0; i < 3; i++)
+        {
+            var req = new PairRequestPayload
+            {
+                PairingCode = $"FAIL{i:D2}",
+                DeviceLabel = "Brute Forcer"
+            };
+            var (ok, err, _) = await manager.ProcessPairRequestWithResultAsync(clientSession, req);
+            Assert.False(ok);
+            Assert.Equal(ProtocolErrorCodes.InvalidPairingCode, err);
+        }
+
+        // 4th attempt: must be RATE_LIMITED even if user subsequently supplies the correct code!
+        var fourthReq = new PairRequestPayload
+        {
+            PairingCode = "K7M4PX",
+            DeviceLabel = "Brute Forcer"
+        };
+        var (fourthOk, fourthErr, fourthReason) = await manager.ProcessPairRequestWithResultAsync(clientSession, fourthReq);
+        Assert.False(fourthOk);
+        Assert.Equal(ProtocolErrorCodes.RateLimited, fourthErr);
+        Assert.Contains("rate", fourthReason, StringComparison.OrdinalIgnoreCase);
+    }
 }

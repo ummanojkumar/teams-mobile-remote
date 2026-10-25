@@ -202,12 +202,12 @@ public class Program
                 var request = envelope.DeserializePayload<PairRequestPayload>();
                 if (request != null)
                 {
-                    bool forwarded = await routeManager.ProcessPairRequestAsync(session, request);
+                    var (forwarded, pairErrorCode, pairErrorReason) = await routeManager.ProcessPairRequestWithResultAsync(session, request);
                     if (!forwarded)
                     {
                         var rejectEnvelope = ProtocolEnvelope.Create(
                             ProtocolMessageType.PairResponse,
-                            new { approved = false, reason = "Pairing challenge invalid or expired." },
+                            new { approved = false, errorCode = pairErrorCode ?? ProtocolErrorCodes.InvalidPairingCode, reason = pairErrorReason ?? "Pairing challenge invalid or expired." },
                             Guid.Empty);
                         await session.SendMessageAsync(rejectEnvelope.Serialize(), cancellationToken);
                     }

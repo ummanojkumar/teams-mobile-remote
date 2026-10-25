@@ -30,7 +30,22 @@ public class PairingServiceTests
     }
 
     [Fact]
-    public void CreateSingleUseChallenge_Creates60SecondExpiryAndShortCode()
+    public void GeneratePairingCode_Produces6CharacterBase32WithoutAmbiguousCharacters()
+    {
+        for (int i = 0; i < 50; i++)
+        {
+            string code = PairingService.GeneratePairingCode();
+            Assert.Equal(6, code.Length);
+            Assert.Matches(@"^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$", code);
+            Assert.DoesNotContain('0', code);
+            Assert.DoesNotContain('O', code);
+            Assert.DoesNotContain('1', code);
+            Assert.DoesNotContain('I', code);
+        }
+    }
+
+    [Fact]
+    public void CreateSingleUseChallenge_Creates60SecondExpiryAndBase32PairingCode()
     {
         var store = new InMemoryCredentialStore();
         var service = new PairingService(store, (lbl, code) => Task.FromResult(true));
@@ -38,7 +53,8 @@ public class PairingServiceTests
         var challenge = service.CreateSingleUseChallenge("ws://localhost:5100/ws/client");
 
         Assert.NotEqual(Guid.Empty, challenge.ChallengeId);
-        Assert.Matches(@"^\d{3}-\d{3}$", challenge.ShortCode);
+        Assert.Matches(@"^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$", challenge.PairingCode);
+        Assert.Matches(@"^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$", challenge.ShortCode);
         Assert.False(challenge.IsExpired);
         Assert.True(challenge.ExpiresAt > DateTimeOffset.UtcNow.AddSeconds(55));
         Assert.True(challenge.ExpiresAt <= DateTimeOffset.UtcNow.AddSeconds(61));
@@ -127,6 +143,39 @@ public class PairingServiceTests
 
         Assert.False(success);
         Assert.Equal(ProtocolErrorCodes.InvalidPairingCode, errorCode);
+    }
+
+    [Fact]
+    public async Task RedeemChallenge_WhenIncorrectCodeEntered_DoesNotInvalidateActiveChallenge()
+    {
+        var store = new InMemoryCredentialStore();
+        var service = new PairingService(store, (lbl, code) => Task.FromResult(true));
+
+        var challenge = service.CreateSingleUseChallenge("ws://localhost:5100/ws/client");
+
+        // Attacker / accidental typo guess
+        var wrongRequest = new PairRequestPayload
+        {
+            PairingCode = "WRONGX",
+            DeviceLabel = "Typo Phone"
+        };
+        var (wrongSuccess, _, wrongErrorCode, _) = await service.RedeemChallengeAsync(wrongRequest);
+        Assert.False(wrongSuccess);
+        Assert.Equal(ProtocolErrorCodes.InvalidPairingCode, wrongErrorCode);
+
+        // Challenge is STILL active for the legitimate user
+        Assert.NotNull(service.GetActiveChallenge());
+
+        // Legitimate user enters the correct pairing code
+        var validRequest = new PairRequestPayload
+        {
+            PairingCode = challenge.PairingCode,
+            DeviceLabel = "Legitimate Phone"
+        };
+        var (validSuccess, record, _, _) = await service.RedeemChallengeAsync(validRequest);
+        Assert.True(validSuccess);
+        Assert.NotNull(record);
+        Assert.True(service.IsPaired);
     }
 
     [Fact]

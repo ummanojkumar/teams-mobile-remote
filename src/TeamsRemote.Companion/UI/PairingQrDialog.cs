@@ -41,7 +41,7 @@ public sealed class PairingQrDialog : Form
 
         var lblCodeDesc = new Label
         {
-            Text = "Matching Confirmation Code:",
+            Text = "Pairing Code (Enter on Phone):",
             Location = new Point(20, 268),
             Size = new Size(340, 20),
             TextAlign = ContentAlignment.MiddleCenter,
@@ -54,7 +54,7 @@ public sealed class PairingQrDialog : Form
             Location = new Point(70, 292),
             Size = new Size(240, 42),
             TextAlign = ContentAlignment.MiddleCenter,
-            Font = new Font("Segoe UI", 18f, FontStyle.Bold),
+            Font = new Font("Consolas", 22f, FontStyle.Bold),
             ForeColor = Color.FromArgb(13, 110, 253),
             BackColor = Color.FromArgb(233, 236, 239),
             BorderStyle = BorderStyle.FixedSingle

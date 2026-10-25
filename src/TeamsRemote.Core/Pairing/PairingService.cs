@@ -44,18 +44,31 @@ public sealed class PairingService
 
     public Guid? ActiveDeviceId => ActiveDevice?.DeviceId;
 
+    public static readonly char[] Base32Alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ".ToCharArray();
+
+    public static string GeneratePairingCode()
+    {
+        Span<byte> randomBytes = stackalloc byte[6];
+        RandomNumberGenerator.Fill(randomBytes);
+        Span<char> code = stackalloc char[6];
+        for (int i = 0; i < 6; i++)
+        {
+            code[i] = Base32Alphabet[randomBytes[i] % Base32Alphabet.Length];
+        }
+        return new string(code);
+    }
+
     public PairChallengePayload CreateSingleUseChallenge(string relayUrl)
     {
         lock (_lock)
         {
-            int codeNumber = RandomNumberGenerator.GetInt32(100000, 1000000);
-            string shortCode = $"{codeNumber / 1000:D3}-{codeNumber % 1000:D3}";
+            string pairingCode = GeneratePairingCode();
 
             _activeChallenge = new PairChallengePayload
             {
                 ChallengeId = Guid.NewGuid(),
                 RelayUrl = relayUrl,
-                ShortCode = shortCode,
+                PairingCode = pairingCode,
                 // Exactly 60 seconds TTL as required
                 ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(60)
             };
@@ -84,7 +97,7 @@ public sealed class PairingService
 
         lock (_lock)
         {
-            if (_activeChallenge == null || _activeChallenge.ChallengeId != request.ChallengeId)
+            if (_activeChallenge == null)
             {
                 return (false, null, ProtocolErrorCodes.InvalidPairingCode, "No matching pairing challenge found.");
             }
@@ -95,18 +108,27 @@ public sealed class PairingService
                 return (false, null, ProtocolErrorCodes.PairingExpired, "Pairing challenge has expired after 60 seconds.");
             }
 
-            if (!string.Equals(_activeChallenge.ShortCode, request.ShortCode, StringComparison.OrdinalIgnoreCase))
+            // The pairing code MUST match the active challenge
+            bool codeMatches = string.Equals(_activeChallenge.PairingCode, request.EffectivePairingCode, StringComparison.OrdinalIgnoreCase);
+            if (!codeMatches)
             {
-                return (false, null, ProtocolErrorCodes.InvalidPairingCode, "Verification code does not match the challenge.");
+                // Invalid guesses MUST NOT affect another active challenge
+                return (false, null, ProtocolErrorCodes.InvalidPairingCode, "Verification code does not match the active challenge.");
             }
 
-            // Invalidate immediately to ensure single-use
+            // If ChallengeId was supplied, it must also match
+            if (request.ChallengeId != Guid.Empty && _activeChallenge.ChallengeId != request.ChallengeId)
+            {
+                return (false, null, ProtocolErrorCodes.InvalidPairingCode, "Challenge ID mismatch.");
+            }
+
+            // Consume challenge only after a correct code redemption starts the approval flow
             challenge = _activeChallenge;
             _activeChallenge = null;
         }
 
-        // Ask companion user for confirmation with matching short code and device label
-        bool userApproved = await _confirmPairingPromptFunc(request.DeviceLabel, challenge.ShortCode);
+        // Ask companion user for confirmation with matching pairing code and device label
+        bool userApproved = await _confirmPairingPromptFunc(request.DeviceLabel, challenge.PairingCode);
         if (!userApproved)
         {
             return (false, null, ProtocolErrorCodes.PairingRejected, "Pairing was declined on the companion.");

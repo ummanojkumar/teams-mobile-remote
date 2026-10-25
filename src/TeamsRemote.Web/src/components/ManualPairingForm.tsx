@@ -1,6 +1,11 @@
 import React, { useState } from 'react';
-import { KeyRound, ArrowRight, Clipboard } from 'lucide-react';
-import { parseManualInput, parsePairingPayload, type ParsedChallenge } from '../services/pairing';
+import { KeyRound, ArrowRight, Clipboard, ChevronDown, ChevronUp } from 'lucide-react';
+import {
+  parseManualCode,
+  parsePairingPayload,
+  getDefaultRelayUrl,
+  type ParsedChallenge,
+} from '../services/pairing';
 
 interface ManualPairingFormProps {
   onSubmitChallenge: (challenge: ParsedChallenge) => void;
@@ -11,12 +16,35 @@ export const ManualPairingForm: React.FC<ManualPairingFormProps> = ({
   onSubmitChallenge,
   onSwitchToCamera,
 }) => {
-  const [pastePayload, setPastePayload] = useState('');
-  const [challengeId, setChallengeId] = useState('');
-  const [shortCode, setShortCode] = useState('');
+  const [pairingCode, setPairingCode] = useState('');
   const [relayUrl, setRelayUrl] = useState('');
-  const [mode, setMode] = useState<'paste' | 'fields'>('paste');
+  const [pastePayload, setPastePayload] = useState('');
+  const [mode, setMode] = useState<'code' | 'paste'>('code');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+
+  const handleCodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFormError(null);
+    const upper = e.target.value.toUpperCase();
+    if (/[01IO]/.test(upper)) {
+      setFormError('Characters 0, 1, I, and O are excluded to prevent confusion.');
+    }
+    const clean = upper.replace(/[^2-9A-Z]/g, '').replace(/[01IO]/g, '').slice(0, 6);
+    setPairingCode(clean);
+  };
+
+  const handleCodeSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError(null);
+
+    const result = parseManualCode(pairingCode, relayUrl || undefined);
+    if (!result.success || !result.challenge) {
+      setFormError(result.error || 'Invalid 6-character pairing code');
+      return;
+    }
+
+    onSubmitChallenge(result.challenge);
+  };
 
   const handlePasteSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -25,19 +53,6 @@ export const ManualPairingForm: React.FC<ManualPairingFormProps> = ({
     const result = parsePairingPayload(pastePayload);
     if (!result.success || !result.challenge) {
       setFormError(result.error || 'Invalid QR payload format');
-      return;
-    }
-
-    onSubmitChallenge(result.challenge);
-  };
-
-  const handleFieldsSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setFormError(null);
-
-    const result = parseManualInput(challengeId, shortCode, relayUrl || undefined);
-    if (!result.success || !result.challenge) {
-      setFormError(result.error || 'Invalid input fields');
       return;
     }
 
@@ -60,17 +75,17 @@ export const ManualPairingForm: React.FC<ManualPairingFormProps> = ({
       <div className="manual-mode-selector">
         <button
           type="button"
+          onClick={() => { setMode('code'); setFormError(null); }}
+          className={`mode-tab-btn ${mode === 'code' ? 'active' : ''}`}
+        >
+          Enter 6-Char Code
+        </button>
+        <button
+          type="button"
           onClick={() => { setMode('paste'); setFormError(null); }}
           className={`mode-tab-btn ${mode === 'paste' ? 'active' : ''}`}
         >
           Paste QR Payload
-        </button>
-        <button
-          type="button"
-          onClick={() => { setMode('fields'); setFormError(null); }}
-          className={`mode-tab-btn ${mode === 'fields' ? 'active' : ''}`}
-        >
-          Enter ID & Code
         </button>
       </div>
 
@@ -80,7 +95,68 @@ export const ManualPairingForm: React.FC<ManualPairingFormProps> = ({
         </div>
       )}
 
-      {mode === 'paste' ? (
+      {mode === 'code' ? (
+        <form onSubmit={handleCodeSubmit} className="pairing-form">
+          <div className="form-group">
+            <label htmlFor="pairing-code" className="form-label">
+              6-Character Pairing Code
+            </label>
+            <input
+              id="pairing-code"
+              type="text"
+              value={pairingCode}
+              onChange={handleCodeChange}
+              placeholder="e.g. K7M4PX"
+              maxLength={6}
+              autoCapitalize="characters"
+              autoComplete="off"
+              spellCheck="false"
+              className="form-input pairing-code-input"
+              required
+            />
+            <p className="form-helper">
+              Enter the single 6-character code shown on your laptop companion (excludes 0, 1, I, O).
+            </p>
+          </div>
+
+          <div className="advanced-settings-toggle">
+            <button
+              type="button"
+              onClick={() => setShowAdvanced(!showAdvanced)}
+              className="text-link-btn"
+              style={{ fontSize: '0.8rem', padding: '4px 0', display: 'flex', alignItems: 'center', gap: '4px' }}
+            >
+              {showAdvanced ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              <span>{showAdvanced ? 'Hide Relay URL' : 'Advanced: Custom Relay URL'}</span>
+            </button>
+          </div>
+
+          {showAdvanced && (
+            <div className="form-group">
+              <label htmlFor="relay-url" className="form-label">
+                Relay URL <span className="label-optional">(optional)</span>
+              </label>
+              <input
+                id="relay-url"
+                type="text"
+                value={relayUrl}
+                onChange={(e) => setRelayUrl(e.target.value)}
+                placeholder={getDefaultRelayUrl()}
+                className="form-input font-mono"
+              />
+            </div>
+          )}
+
+          <button
+            type="submit"
+            className="primary-submit-btn touch-target"
+            disabled={pairingCode.length !== 6}
+          >
+            <KeyRound size={18} />
+            <span>Connect & Pair</span>
+          </button>
+        </form>
+      ) : (
         <form onSubmit={handlePasteSubmit} className="pairing-form">
           <div className="form-group">
             <label htmlFor="payload-input" className="form-label">
@@ -113,61 +189,6 @@ export const ManualPairingForm: React.FC<ManualPairingFormProps> = ({
           <button type="submit" className="primary-submit-btn touch-target">
             <span>Start Pairing</span>
             <ArrowRight size={18} />
-          </button>
-        </form>
-      ) : (
-        <form onSubmit={handleFieldsSubmit} className="pairing-form">
-          <div className="form-group">
-            <label htmlFor="challenge-id" className="form-label">
-              Challenge ID (UUID)
-            </label>
-            <input
-              id="challenge-id"
-              type="text"
-              value={challengeId}
-              onChange={(e) => setChallengeId(e.target.value)}
-              placeholder="e.g. 12345678-1234-1234-1234-1234567890ab"
-              className="form-input font-mono"
-              required
-            />
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="short-code" className="form-label">
-              Verification Code
-            </label>
-            <input
-              id="short-code"
-              type="text"
-              value={shortCode}
-              onChange={(e) => setShortCode(e.target.value)}
-              placeholder="e.g. 482-910"
-              maxLength={7}
-              className="form-input font-mono shortcode-input"
-              required
-            />
-            <p className="form-helper">
-              Enter the 6-digit code shown on the Companion QR screen.
-            </p>
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="relay-url" className="form-label">
-              Relay URL <span className="label-optional">(optional)</span>
-            </label>
-            <input
-              id="relay-url"
-              type="text"
-              value={relayUrl}
-              onChange={(e) => setRelayUrl(e.target.value)}
-              placeholder="ws://127.0.0.1:5100/ws/client"
-              className="form-input font-mono"
-            />
-          </div>
-
-          <button type="submit" className="primary-submit-btn touch-target">
-            <KeyRound size={18} />
-            <span>Redeem Challenge</span>
           </button>
         </form>
       )}

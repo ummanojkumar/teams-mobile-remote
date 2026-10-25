@@ -44,10 +44,52 @@ export class PairingStorage {
 }
 
 export interface ParsedChallenge {
-  challengeId: string;
-  shortCode: string;
+  pairingCode: string;
+  challengeId?: string;
+  shortCode?: string;
   relayUrl: string;
   expiresAt: Date;
+}
+
+export const BASE32_PAIRING_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+export const BASE32_PAIRING_REGEX = /^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$/;
+
+export function validatePairingCode(input: string): {
+  valid: boolean;
+  normalized: string;
+  error?: string;
+} {
+  const normalized = (input || '').trim().toUpperCase();
+  if (!normalized) {
+    return { valid: false, normalized: '', error: 'Pairing code cannot be empty' };
+  }
+
+  // Check forbidden visually confusing characters: 0, 1, I, O
+  if (/[01IO]/.test(normalized)) {
+    return {
+      valid: false,
+      normalized,
+      error: 'Invalid characters: 0, 1, I, and O are excluded to prevent confusion.',
+    };
+  }
+
+  if (normalized.length !== 6) {
+    return {
+      valid: false,
+      normalized,
+      error: `Expected 6 characters, got ${normalized.length}.`,
+    };
+  }
+
+  if (!BASE32_PAIRING_REGEX.test(normalized)) {
+    return {
+      valid: false,
+      normalized,
+      error: 'Invalid pairing code format. Use capital letters A-Z and digits 2-9.',
+    };
+  }
+
+  return { valid: true, normalized };
 }
 
 /**
@@ -67,11 +109,17 @@ export function parsePairingPayload(input: string): {
   if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
     try {
       const data = JSON.parse(trimmed) as Partial<PairChallengePayload>;
-      if (!data.challengeId || !data.shortCode || !data.relayUrl || !data.expiresAt) {
-        return { success: false, error: 'QR payload is missing required fields (challengeId, shortCode, or relayUrl)' };
+      const rawCode = (data.pairingCode || data.shortCode || '').trim().toUpperCase();
+      if (!rawCode || !data.relayUrl) {
+        return { success: false, error: 'QR payload is missing required fields (pairingCode or relayUrl)' };
       }
 
-      const expires = new Date(data.expiresAt);
+      const { valid, normalized, error } = validatePairingCode(rawCode);
+      if (!valid) {
+        return { success: false, error: 'QR payload contains invalid pairing code: ' + error };
+      }
+
+      const expires = data.expiresAt ? new Date(data.expiresAt) : new Date(Date.now() + 60000);
       if (isNaN(expires.getTime())) {
         return { success: false, error: 'Invalid expiration timestamp in payload' };
       }
@@ -83,8 +131,9 @@ export function parsePairingPayload(input: string): {
       return {
         success: true,
         challenge: {
+          pairingCode: normalized,
+          shortCode: normalized,
           challengeId: data.challengeId,
-          shortCode: formatShortCode(data.shortCode),
           relayUrl: normalizeRelayUrl(data.relayUrl),
           expiresAt: expires,
         },
@@ -103,63 +152,101 @@ export function isChallengeExpired(expiresAt: string | Date): boolean {
 }
 
 /**
- * Validates manual inputs (Challenge ID GUID + 6-digit confirmation code).
+ * Resolves the appropriate default relay WebSocket URL based on the current client environment:
+ * - Localhost / Loopback: ws://127.0.0.1:5100/ws/client
+ * - LAN Development (Vite dev port 5173 or private network IPv4 e.g. 192.168.x.x, 10.x.x.x):
+ *   ws://<hostname>:5100/ws/client (maps Vite host to Relay port 5100 using ws://)
+ * - Production / Public Domain (HTTPS): wss://<host>/ws/client
  */
-export function parseManualInput(
-  challengeIdInput: string,
+export function getDefaultRelayUrl(): string {
+  if (typeof window === 'undefined' || !window.location) {
+    return 'ws://127.0.0.1:5100/ws/client';
+  }
+
+  const hostname = window.location.hostname || '127.0.0.1';
+  const isHttps = window.location.protocol === 'https:';
+  const proto = isHttps ? 'wss:' : 'ws:';
+
+  // 1. Loopback addresses always connect to local relay port 5100
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+    return 'ws://127.0.0.1:5100/ws/client';
+  }
+
+  // 2. LAN development: Vite dev port (5173) or private network IPv4 / mDNS (.local)
+  const isPrivateIp =
+    /^192\.168\./.test(hostname) ||
+    /^10\./.test(hostname) ||
+    /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(hostname) ||
+    hostname.endsWith('.local');
+
+  if (window.location.port === '5173' || (!isHttps && isPrivateIp)) {
+    return `${proto}//${hostname}:5100/ws/client`;
+  }
+
+  // 3. Production / reverse proxy
+  return `${proto}//${window.location.host}/ws/client`;
+}
+
+/**
+ * Validates single 6-character Base32 pairing code without requiring Challenge UUID.
+ */
+export function parseManualCode(
   codeInput: string,
   relayUrlInput?: string
 ): { success: boolean; challenge?: ParsedChallenge; error?: string } {
-  const cleanId = challengeIdInput.trim();
-  const cleanCode = codeInput.trim();
-
-  // Validate GUID format
-  const guidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (!guidRegex.test(cleanId)) {
-    return { success: false, error: 'Invalid Challenge ID. Must be a valid UUID (e.g. 12345678-1234-1234-1234-1234567890ab).' };
+  const { valid, normalized, error } = validatePairingCode(codeInput);
+  if (!valid) {
+    return { success: false, error };
   }
 
-  // Validate 6-digit code format (e.g. 123-456 or 123456)
-  const codeRegex = /^\d{3}-?\d{3}$/;
-  if (!codeRegex.test(cleanCode)) {
-    return { success: false, error: 'Invalid verification code. Expected 6 digits (e.g. 123-456).' };
-  }
-
-  const defaultRelay = typeof window !== 'undefined' && window.location.hostname === 'localhost'
-    ? 'ws://127.0.0.1:5100/ws/client'
-    : 'wss://' + (typeof window !== 'undefined' ? window.location.host : 'relay.example.com') + '/ws/client';
-
-  const relayUrl = relayUrlInput ? normalizeRelayUrl(relayUrlInput.trim()) : defaultRelay;
+  const relayUrl = relayUrlInput && relayUrlInput.trim()
+    ? normalizeRelayUrl(relayUrlInput.trim())
+    : getDefaultRelayUrl();
 
   return {
     success: true,
     challenge: {
-      challengeId: cleanId,
-      shortCode: formatShortCode(cleanCode),
+      pairingCode: normalized,
+      shortCode: normalized,
       relayUrl,
-      // Default manual entry to 60s TTL from now if not specified in JSON
+      // Default manual entry to 60s TTL
       expiresAt: new Date(Date.now() + 60000),
     },
   };
 }
 
+/**
+ * Legacy manual input parser retained for backward test compatibility.
+ */
+export function parseManualInput(
+  _challengeIdInput: string,
+  codeInput: string,
+  relayUrlInput?: string
+): { success: boolean; challenge?: ParsedChallenge; error?: string } {
+  return parseManualCode(codeInput, relayUrlInput);
+}
+
 export function formatShortCode(code: string): string {
-  const digits = code.replace(/\D/g, '');
-  if (digits.length === 6) {
-    return `${digits.slice(0, 3)}-${digits.slice(3, 6)}`;
-  }
-  return code;
+  return (code || '').trim().toUpperCase();
 }
 
 export function normalizeRelayUrl(url: string): string {
   let normalized = (url || '').trim();
   if (!normalized) {
-    return typeof window !== 'undefined' && window.location.hostname === 'localhost'
-      ? 'ws://127.0.0.1:5100/ws/client'
-      : 'wss://' + (typeof window !== 'undefined' ? window.location.host : 'relay.example.com') + '/ws/client';
+    return getDefaultRelayUrl();
   }
 
-  // In production, enforce wss://
+  // Auto-prepend ws:// or wss:// if user entered IP/host without scheme (e.g. 192.168.1.5:5100)
+  if (!/^[a-zA-Z]+:\/\//.test(normalized)) {
+    const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+    normalized = (isHttps ? 'wss://' : 'ws://') + normalized;
+  } else if (normalized.startsWith('http://')) {
+    normalized = normalized.replace('http://', 'ws://');
+  } else if (normalized.startsWith('https://')) {
+    normalized = normalized.replace('https://', 'wss://');
+  }
+
+  // In production (https), enforce wss://
   if (typeof window !== 'undefined' && window.location.protocol === 'https:' && normalized.startsWith('ws://')) {
     normalized = normalized.replace('ws://', 'wss://');
   }

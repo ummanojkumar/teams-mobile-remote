@@ -11,8 +11,12 @@ public sealed class DeviceRouteManager
 
     private readonly Dictionary<Guid, RelaySession> _sessions = new();
     private readonly Dictionary<Guid, EphemeralChallenge> _challenges = new();
+    private readonly Dictionary<string, Guid> _challengesByCode = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<Guid, PendingPairRequest> _pendingPairRequests = new(); // Keyed by ChallengeId
     private readonly Dictionary<Guid, ActiveRoute> _routes = new(); // Keyed by DeviceId
+    private readonly Dictionary<Guid, (int Count, DateTimeOffset WindowStart)> _failedPairAttempts = new();
+    private const int MaxFailedPairAttempts = 3;
+    private static readonly TimeSpan FailedAttemptWindow = TimeSpan.FromSeconds(60);
     private readonly object _lock = new();
 
     public void RegisterSession(RelaySession session)
@@ -60,6 +64,10 @@ public sealed class DeviceRouteManager
 
             foreach (var chId in deadChallenges)
             {
+                if (_challenges.TryGetValue(chId, out var deadEntry))
+                {
+                    _challengesByCode.Remove(deadEntry.Challenge.EffectivePairingCode);
+                }
                 _challenges.Remove(chId);
             }
 
@@ -129,40 +137,79 @@ public sealed class DeviceRouteManager
             }
 
             _challenges[challenge.ChallengeId] = new EphemeralChallenge(challenge, companionSessionId);
+            if (!string.IsNullOrWhiteSpace(challenge.EffectivePairingCode))
+            {
+                _challengesByCode[challenge.EffectivePairingCode] = challenge.ChallengeId;
+            }
             return true;
         }
     }
 
     public async Task<bool> ProcessPairRequestAsync(RelaySession clientSession, PairRequestPayload request)
     {
-        EphemeralChallenge? challengeEntry;
+        var (success, _, _) = await ProcessPairRequestWithResultAsync(clientSession, request);
+        return success;
+    }
+
+    public async Task<(bool Success, string? ErrorCode, string? ErrorReason)> ProcessPairRequestWithResultAsync(
+        RelaySession clientSession,
+        PairRequestPayload request)
+    {
+        EphemeralChallenge? challengeEntry = null;
 
         lock (_lock)
         {
             PruneExpiredChallenges();
 
-            if (!_challenges.TryGetValue(request.ChallengeId, out challengeEntry))
+            // Strict rate limit check per client session
+            if (IsRateLimitedLocked(clientSession.SessionId))
             {
-                return false; // Challenge not found or expired
+                return (false, ProtocolErrorCodes.RateLimited, "Too many failed pairing attempts. Rate limited. Please wait 60 seconds.");
             }
 
+            string candidateCode = request.EffectivePairingCode;
+
+            // 1. Primary lookup by single 6-character uppercase Base32 code
+            if (!string.IsNullOrWhiteSpace(candidateCode) && _challengesByCode.TryGetValue(candidateCode, out var mappedId))
+            {
+                _challenges.TryGetValue(mappedId, out challengeEntry);
+            }
+            // 2. Fallback lookup by ChallengeId if provided
+            else if (request.ChallengeId != Guid.Empty && _challenges.TryGetValue(request.ChallengeId, out var entryById))
+            {
+                if (string.Equals(entryById.Challenge.EffectivePairingCode, candidateCode, StringComparison.OrdinalIgnoreCase))
+                {
+                    challengeEntry = entryById;
+                }
+            }
+
+            // If not found: invalid guess!
+            if (challengeEntry == null)
+            {
+                RecordFailedAttemptLocked(clientSession.SessionId);
+                // Invalid guess does NOT consume or affect any active challenge!
+                return (false, ProtocolErrorCodes.InvalidPairingCode, "Pairing challenge invalid or expired.");
+            }
+
+            // Expiration check
             if (challengeEntry.Challenge.IsExpired)
             {
-                _challenges.Remove(request.ChallengeId);
-                return false;
+                _challenges.Remove(challengeEntry.Challenge.ChallengeId);
+                _challengesByCode.Remove(challengeEntry.Challenge.EffectivePairingCode);
+                RecordFailedAttemptLocked(clientSession.SessionId);
+                return (false, ProtocolErrorCodes.PairingExpired, "Pairing challenge invalid or expired.");
             }
 
-            if (!string.Equals(challengeEntry.Challenge.ShortCode, request.ShortCode, StringComparison.OrdinalIgnoreCase))
-            {
-                return false; // Code mismatch
-            }
+            // Valid code matched! Reset rate-limiter for this session
+            _failedPairAttempts.Remove(clientSession.SessionId);
 
-            // Remove challenge so it cannot be reused (single-use)
-            _challenges.Remove(request.ChallengeId);
+            // Consume challenge only after a correct code redemption starts the approval flow (Single-use)
+            _challenges.Remove(challengeEntry.Challenge.ChallengeId);
+            _challengesByCode.Remove(challengeEntry.Challenge.EffectivePairingCode);
 
             clientSession.DeviceLabel = request.DeviceLabel;
 
-            _pendingPairRequests[request.ChallengeId] = new PendingPairRequest(
+            _pendingPairRequests[challengeEntry.Challenge.ChallengeId] = new PendingPairRequest(
                 clientSession.SessionId,
                 challengeEntry.CompanionSessionId,
                 DateTimeOffset.UtcNow);
@@ -175,16 +222,25 @@ public sealed class DeviceRouteManager
             _sessions.TryGetValue(challengeEntry.CompanionSessionId, out companionSession);
         }
 
-        if (companionSession == null) return false;
+        if (companionSession == null)
+        {
+            return (false, ProtocolErrorCodes.InvalidPairingCode, "Companion is no longer connected.");
+        }
+
+        var enrichedRequest = request with
+        {
+            ChallengeId = challengeEntry.Challenge.ChallengeId,
+            PairingCode = challengeEntry.Challenge.EffectivePairingCode
+        };
 
         var envelope = ProtocolEnvelope.Create(
             ProtocolMessageType.PairRequest,
-            request,
+            enrichedRequest,
             Guid.Empty,
-            correlationId: request.ChallengeId);
+            correlationId: challengeEntry.Challenge.ChallengeId);
 
         await companionSession.SendMessageAsync(envelope.Serialize());
-        return true;
+        return (true, null, null);
     }
 
     public async Task<bool> ProcessPairApproveAsync(RelaySession companionSession, PairApprovePayload approve)
@@ -348,7 +404,47 @@ public sealed class DeviceRouteManager
 
         foreach (var key in expired)
         {
+            if (_challenges.TryGetValue(key, out var entry))
+            {
+                _challengesByCode.Remove(entry.Challenge.EffectivePairingCode);
+            }
             _challenges.Remove(key);
+        }
+    }
+
+    private bool IsRateLimitedLocked(Guid sessionId)
+    {
+        if (_failedPairAttempts.TryGetValue(sessionId, out var window))
+        {
+            if (DateTimeOffset.UtcNow - window.WindowStart > FailedAttemptWindow)
+            {
+                _failedPairAttempts.Remove(sessionId);
+                return false;
+            }
+
+            return window.Count >= MaxFailedPairAttempts;
+        }
+
+        return false;
+    }
+
+    private void RecordFailedAttemptLocked(Guid sessionId)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (_failedPairAttempts.TryGetValue(sessionId, out var window))
+        {
+            if (now - window.WindowStart > FailedAttemptWindow)
+            {
+                _failedPairAttempts[sessionId] = (1, now);
+            }
+            else
+            {
+                _failedPairAttempts[sessionId] = (window.Count + 1, window.WindowStart);
+            }
+        }
+        else
+        {
+            _failedPairAttempts[sessionId] = (1, now);
         }
     }
 }

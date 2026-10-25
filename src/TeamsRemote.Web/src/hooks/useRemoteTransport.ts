@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { PairingStorage, type ParsedChallenge } from '../services/pairing';
+import { PairingStorage, getDefaultRelayUrl, type ParsedChallenge } from '../services/pairing';
 import { TransportClient } from '../services/transport';
 import {
   type CommandResultPayload,
@@ -229,7 +229,7 @@ export function useRemoteTransport() {
       const creds: PairedCredentials = {
         deviceId: response.deviceId,
         sessionToken: response.sessionToken || '',
-        relayUrl: transportRef.current?.getRelayUrl() || 'ws://127.0.0.1:5100/ws/client',
+        relayUrl: transportRef.current?.getRelayUrl() || getDefaultRelayUrl(),
         pairedAt: new Date().toISOString(),
       };
 
@@ -340,10 +340,11 @@ export function useRemoteTransport() {
       pairingPollTimerRef.current = null;
     }
 
+    const pairingCode = challenge.pairingCode || challenge.shortCode || '';
     setState((prev: RemoteState) => ({
       ...prev,
       pairing: 'awaiting_approval',
-      matchingCode: challenge.shortCode,
+      matchingCode: pairingCode,
       errorMessage: null,
     }));
 
@@ -386,7 +387,7 @@ export function useRemoteTransport() {
           pairingConnectTimerRef.current = null;
         }
 
-        transportRef.current.sendPairRequest(challenge.challengeId, challenge.shortCode, deviceLabel);
+        transportRef.current.sendPairRequest(challenge.challengeId || '00000000-0000-0000-0000-000000000000', pairingCode, deviceLabel);
 
         // 60-second approval timeout matching challenge TTL
         if (pairingApprovalTimerRef.current) {

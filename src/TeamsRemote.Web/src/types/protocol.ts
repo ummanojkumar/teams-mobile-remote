@@ -81,16 +81,18 @@ export interface StateSnapshotPayload {
 }
 
 export interface PairChallengePayload {
-  challengeId: string;
+  challengeId?: string;
+  pairingCode: string;
+  shortCode?: string;
   relayUrl: string;
-  shortCode: string;
   expiresAt: string;
 }
 
 export interface PairRequestPayload {
-  challengeId: string;
-  shortCode: string;
+  pairingCode: string;
+  shortCode?: string;
   deviceLabel: string;
+  challengeId?: string;
 }
 
 export interface PairApprovePayload {
