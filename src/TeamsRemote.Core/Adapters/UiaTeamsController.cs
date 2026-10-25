@@ -201,6 +201,46 @@ public sealed class UiaTeamsController : ITeamsController
             cancellationToken: cancellationToken);
     }
 
+    public IDisposable? SubscribeMicrophoneStateChanged(Action onStateChangeDetected)
+    {
+        ThrowIfDisposed();
+
+        try
+        {
+            var processInfo = DetectTeamsProcess();
+            if (!processInfo.IsRunning) return null;
+
+            var (surface, meetingWindow) = FindMeetingSurface(processInfo.AllProcessIds);
+            if (!surface.IsDetected || meetingWindow == null) return null;
+
+            var controls = FindControlElements(meetingWindow);
+            var micElement = controls[TargetControl.Microphone];
+            if (micElement == null) return null;
+
+            var propHandler = micElement.RegisterPropertyChangedEvent(
+                TreeScope.Element,
+                (automationElement, propertyId, newValue) =>
+                {
+                    try
+                    {
+                        onStateChangeDetected();
+                    }
+                    catch
+                    {
+                        // Safe swallow on background MTA callback
+                    }
+                },
+                _automation.PropertyLibrary.Element.Name,
+                _automation.PropertyLibrary.Toggle.ToggleState);
+
+            return propHandler;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public async Task ObserveEventsAsync(
         TimeSpan duration,
         Action<ControlEventReport> onEventObserved,

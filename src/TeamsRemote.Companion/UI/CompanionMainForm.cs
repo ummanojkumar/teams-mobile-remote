@@ -22,6 +22,7 @@ public sealed class CompanionMainForm : Form
     private readonly PairingService _pairingService;
     private readonly CommandProcessor _commandProcessor;
     private readonly ConnectionClient _connectionClient;
+    private readonly TeamsPassiveStateObserver _passiveObserver;
     private readonly NotifyIcon _trayIcon;
     private readonly ContextMenuStrip _trayMenu;
 
@@ -55,6 +56,12 @@ public sealed class CompanionMainForm : Form
         _pairingService = new PairingService(_credentialStore, ConfirmPairingDialogAsync);
         _commandProcessor = new CommandProcessor(_stateStore, () => _pairingService.ActiveDeviceId, _controller);
         _connectionClient = new ConnectionClient(_relayUri, _commandProcessor, _stateStore, _pairingService);
+        _passiveObserver = new TeamsPassiveStateObserver(
+            _controller,
+            _stateStore,
+            () => _pairingService.ActiveDeviceId != null,
+            pollingInterval: TimeSpan.FromMilliseconds(1500),
+            debounceDuration: TimeSpan.FromMilliseconds(150));
 
         // Tray menu and icon
         _trayMenu = new ContextMenuStrip();
@@ -131,6 +138,7 @@ public sealed class CompanionMainForm : Form
             await _pairingService.InitializeAsync();
             UpdatePairingUi();
             await ScanTeamsAsync();
+            _passiveObserver.Start();
 
             // Start outbound transport in background
             _ = Task.Run(async () =>
@@ -639,6 +647,7 @@ public sealed class CompanionMainForm : Form
 
     private void ExitApplication()
     {
+        _passiveObserver.Dispose();
         _isExiting = true;
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
@@ -661,6 +670,7 @@ public sealed class CompanionMainForm : Form
         }
         else
         {
+            _passiveObserver.Dispose();
             _trayIcon.Visible = false;
             _trayIcon.Dispose();
             _controller.Dispose();

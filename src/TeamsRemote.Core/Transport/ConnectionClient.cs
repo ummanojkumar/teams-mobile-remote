@@ -1,6 +1,7 @@
 using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Text;
+using TeamsRemote.Core.Models;
 using TeamsRemote.Core.Pairing;
 using TeamsRemote.Core.Protocol;
 using TeamsRemote.Core.State;
@@ -237,6 +238,10 @@ public sealed class ConnectionClient : IAsyncDisposable
     {
         var (rev, micState, conf, meeting) = _stateStore.GetSnapshot();
 
+        bool isMicUnavailable = string.Equals(micState, TeamsControlState.Unknown, StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(meeting, "none", StringComparison.OrdinalIgnoreCase) ||
+                                conf == StateConfidence.Unknown;
+
         var snapshot = new StateSnapshotPayload
         {
             StateRevision = rev,
@@ -246,7 +251,7 @@ public sealed class ConnectionClient : IAsyncDisposable
                 ["microphone"] = new ControlSnapshotItem
                 {
                     Value = micState,
-                    Capability = "verified",
+                    Capability = isMicUnavailable ? "unavailable" : "verified",
                     Confidence = conf.ToString().ToLowerInvariant()
                 }
             },

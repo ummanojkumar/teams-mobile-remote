@@ -119,4 +119,72 @@ describe('Phase 4A Remote Microphone Control Component', () => {
     const button = screen.getByRole('button', { name: /Disconnected/i });
     expect(button).toBeDisabled();
   });
+
+  it('passively flips button from Unmute to Mute when snapshot changes from muted to unmuted', () => {
+    const { rerender } = render(
+      <ControlCard
+        type="microphone"
+        snapshot={{
+          value: 'muted',
+          capability: 'verified',
+          confidence: 'confirmed',
+        }}
+        isConnected={true}
+        isActionPending={false}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: /Unmute/i })).toBeInTheDocument();
+
+    // Passive snapshot arrives reflecting user toggling Teams desktop directly
+    rerender(
+      <ControlCard
+        type="microphone"
+        snapshot={{
+          value: 'unmuted',
+          capability: 'verified',
+          confidence: 'confirmed',
+        }}
+        isConnected={true}
+        isActionPending={false}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: /Mute/i })).toBeInTheDocument();
+  });
+
+  it('passively disables button and shows Unavailable when Teams closes or meeting disappears', () => {
+    const { rerender } = render(
+      <ControlCard
+        type="microphone"
+        snapshot={{
+          value: 'muted',
+          capability: 'verified',
+          confidence: 'confirmed',
+        }}
+        isConnected={true}
+        isActionPending={false}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: /Unmute/i })).toBeInTheDocument();
+
+    // Passive snapshot arrives when Teams closes or meeting surface ends
+    rerender(
+      <ControlCard
+        type="microphone"
+        snapshot={{
+          value: 'unknown',
+          capability: 'unavailable',
+          confidence: 'unknown',
+        }}
+        isConnected={true}
+        isActionPending={false}
+      />
+    );
+
+    const button = screen.getByRole('button', { name: /Unavailable/i });
+    expect(button).toBeInTheDocument();
+    expect(button).toBeDisabled();
+  });
 });

@@ -14,18 +14,63 @@ public sealed class MeetingStateStore
 
     public event Action? StateChanged;
 
-    public void UpdateObserved(string newState, bool isConfirmed = true, string meetingStatus = "active")
+    public bool UpdateObserved(string newState, bool isConfirmed = true, string meetingStatus = "active")
     {
+        var newConfidence = isConfirmed ? StateConfidence.Confirmed : StateConfidence.Stale;
+        bool changed = false;
+
         lock (_lock)
         {
+            if (string.Equals(MicrophoneState, newState, StringComparison.OrdinalIgnoreCase) &&
+                Confidence == newConfidence &&
+                string.Equals(MeetingStatus, meetingStatus, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
             MicrophoneState = newState;
-            Confidence = isConfirmed ? StateConfidence.Confirmed : StateConfidence.Stale;
+            Confidence = newConfidence;
             MeetingStatus = meetingStatus;
             StateRevision++;
             LastObservedAt = DateTimeOffset.UtcNow;
+            changed = true;
         }
 
-        StateChanged?.Invoke();
+        if (changed)
+        {
+            StateChanged?.Invoke();
+        }
+
+        return changed;
+    }
+
+    public bool MarkUnavailable(string meetingStatus = "none")
+    {
+        bool changed = false;
+
+        lock (_lock)
+        {
+            if (string.Equals(MicrophoneState, TeamsControlState.Unknown, StringComparison.OrdinalIgnoreCase) &&
+                Confidence == StateConfidence.Unknown &&
+                string.Equals(MeetingStatus, meetingStatus, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            MicrophoneState = TeamsControlState.Unknown;
+            Confidence = StateConfidence.Unknown;
+            MeetingStatus = meetingStatus;
+            StateRevision++;
+            LastObservedAt = DateTimeOffset.UtcNow;
+            changed = true;
+        }
+
+        if (changed)
+        {
+            StateChanged?.Invoke();
+        }
+
+        return changed;
     }
 
     public void MarkPending()

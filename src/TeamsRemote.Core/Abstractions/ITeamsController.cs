@@ -27,4 +27,11 @@ public interface ITeamsController : IDisposable
     Task<MicrophoneCommandResult> SetMicrophoneStateAsync(
         DesiredMicrophoneState desiredState,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Subscribes to microphone state-change events on the active meeting control.
+    /// Invokes onStateChangeDetected when a UIA property change (e.g. Name or ToggleState) is raised.
+    /// Returns an IDisposable that unregisters the UIA event handlers, or null if subscription failed.
+    /// </summary>
+    IDisposable? SubscribeMicrophoneStateChanged(Action onStateChangeDetected);
 }

@@ -40,6 +40,8 @@ public class MicrophoneRemoteExecutionTests
         public Task ObserveEventsAsync(TimeSpan duration, Action<ControlEventReport> onEventObserved, CancellationToken cancellationToken = default) =>
             throw new NotImplementedException();
 
+        public IDisposable? SubscribeMicrophoneStateChanged(Action onStateChangeDetected) => null;
+
         public void Dispose() { }
     }
 
@@ -121,7 +123,7 @@ public class MicrophoneRemoteExecutionTests
         // Advance revision to 5
         for (int i = 0; i < 5; i++)
         {
-            stateStore.UpdateObserved(TeamsControlState.Unmuted, isConfirmed: true, meetingStatus: "active");
+            stateStore.UpdateObserved(i % 2 == 0 ? TeamsControlState.Unmuted : TeamsControlState.Muted, isConfirmed: true, meetingStatus: "active");
         }
         Assert.Equal(5, stateStore.StateRevision);
 
