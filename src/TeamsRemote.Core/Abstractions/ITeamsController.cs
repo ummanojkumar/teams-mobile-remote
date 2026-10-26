@@ -66,4 +66,21 @@ public interface ITeamsController : IDisposable
     /// Returns an IDisposable that unregisters the UIA event handlers, or null if subscription failed.
     /// </summary>
     IDisposable? SubscribeHandStateChanged(Action onStateChangeDetected);
+
+    /// <summary>
+    /// Passively observes the Teams Live Reactions toolbar and flyout menu elements during a user-assisted observation session.
+    /// Strictly read-only: does not invoke the React launcher or any emoji buttons.
+    /// </summary>
+    Task<ReactionDiagnosticReport> ObserveReactionsAsync(
+        TimeSpan duration,
+        Action<string>? onProgressMessage = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Executes a remote Live Reaction invocation (like, love, applause, laugh, surprise).
+    /// Opens the reactions flyout if needed, locates the target button, and triggers it via InvokePattern.
+    /// </summary>
+    Task<ReactionCommandResult> SendReactionAsync(
+        string reaction,
+        CancellationToken cancellationToken = default);
 }

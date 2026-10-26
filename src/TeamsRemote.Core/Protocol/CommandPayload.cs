@@ -15,4 +15,7 @@ public record CommandPayload
 
     [JsonPropertyName("echoText")]
     public string? EchoText { get; init; }
+
+    [JsonPropertyName("reaction")]
+    public string? Reaction { get; init; }
 }

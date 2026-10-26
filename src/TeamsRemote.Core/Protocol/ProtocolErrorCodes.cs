@@ -23,4 +23,5 @@ public static class ProtocolErrorCodes
     public const string LockedSession = "LOCKED_SESSION";
     public const string VerificationFailed = "VERIFICATION_FAILED";
     public const string VerificationTimedOut = "VERIFICATION_TIMED_OUT";
+    public const string PolicyRestricted = "POLICY_RESTRICTED";
 }

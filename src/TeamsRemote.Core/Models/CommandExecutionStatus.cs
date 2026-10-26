@@ -20,6 +20,9 @@ public enum CommandExecutionStatus
     [JsonPropertyName("unsupported")]
     Unsupported,
 
+    [JsonPropertyName("rejected")]
+    Rejected,
+
     [JsonPropertyName("state_uncertain")]
     StateUncertain
 }

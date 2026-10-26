@@ -8,6 +8,7 @@ import { PairingView } from './components/PairingView';
 import { AwaitingApprovalModal } from './components/AwaitingApprovalModal';
 import { CameraSafetyModal } from './components/CameraSafetyModal';
 import { DiagnosticsDrawer } from './components/DiagnosticsDrawer';
+import { ReactionsBar } from './components/ReactionsBar';
 
 export const App: React.FC = () => {
   const { canInstall, install } = usePwaInstall();
@@ -17,10 +18,13 @@ export const App: React.FC = () => {
     isMicActionPending,
     isCameraActionPending,
     isHandActionPending,
+    reactionCooldownRemainingMs,
+    lastSentReaction,
     showCameraSafetyModal,
     setMicrophoneState,
     setCameraState,
     setHandState,
+    sendReaction,
     confirmCameraSafety,
     cancelCameraSafety,
     startPairing,
@@ -84,6 +88,15 @@ export const App: React.FC = () => {
                 isActionPending={isHandActionPending}
               />
             </section>
+
+            {/* Teams Live Reactions (Phase 6B) */}
+            <ReactionsBar
+              isConnected={state.connection === 'connected'}
+              isMeetingActive={state.meetingStatus === 'active'}
+              cooldownRemainingMs={reactionCooldownRemainingMs}
+              lastSentReaction={lastSentReaction}
+              onSendReaction={sendReaction}
+            />
           </div>
         )}
       </main>

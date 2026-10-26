@@ -26,6 +26,12 @@ export function useRemoteTransport() {
   const [isHandActionPending, setIsHandActionPending] = useState(false);
   const handActionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const [reactionCooldownRemainingMs, setReactionCooldownRemainingMs] = useState(0);
+  const [lastSentReaction, setLastSentReaction] = useState<string | null>(null);
+  const reactionCooldownEndTimeRef = useRef<number>(0);
+  const reactionCooldownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const reactionSentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const pairingConnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pairingApprovalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pairingPollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -105,6 +111,10 @@ export function useRemoteTransport() {
       handActionTimerRef.current = null;
     }
     setIsHandActionPending(false);
+
+    if (result.state?.reaction) {
+      setLastSentReaction(result.state.reaction);
+    }
 
     if (result.state?.echo) {
       setEchoLog((prev) => [
@@ -643,6 +653,55 @@ export function useRemoteTransport() {
     ]
   );
 
+  const sendReaction = useCallback(
+    (reaction: string) => {
+      const now = Date.now();
+      if (now < reactionCooldownEndTimeRef.current) {
+        // Drop duplicate or rapid tap during cooldown
+        return;
+      }
+      if (
+        !transportRef.current ||
+        state.connection !== 'connected' ||
+        state.meetingStatus !== 'active'
+      ) {
+        return;
+      }
+
+      // Start 2000ms cooldown immediately
+      const cooldownEnd = now + 2000;
+      reactionCooldownEndTimeRef.current = cooldownEnd;
+      setReactionCooldownRemainingMs(2000);
+      setLastSentReaction(reaction);
+
+      if (reactionCooldownIntervalRef.current) {
+        clearInterval(reactionCooldownIntervalRef.current);
+      }
+      reactionCooldownIntervalRef.current = setInterval(() => {
+        const remaining = Math.max(0, reactionCooldownEndTimeRef.current - Date.now());
+        setReactionCooldownRemainingMs(remaining);
+        if (remaining <= 0) {
+          if (reactionCooldownIntervalRef.current) {
+            clearInterval(reactionCooldownIntervalRef.current);
+            reactionCooldownIntervalRef.current = null;
+          }
+        }
+      }, 100);
+
+      if (reactionSentTimerRef.current) {
+        clearTimeout(reactionSentTimerRef.current);
+      }
+      reactionSentTimerRef.current = setTimeout(() => {
+        setLastSentReaction(null);
+      }, 2500);
+
+      const messageId = generateUuid();
+      const correlationId = generateUuid();
+      transportRef.current.sendReaction(reaction, messageId, correlationId);
+    },
+    [state.connection, state.meetingStatus]
+  );
+
   useEffect(() => {
     return () => {
       if (micActionTimerRef.current) {
@@ -662,6 +721,12 @@ export function useRemoteTransport() {
       }
       if (pairingPollTimerRef.current) {
         clearTimeout(pairingPollTimerRef.current);
+      }
+      if (reactionCooldownIntervalRef.current) {
+        clearInterval(reactionCooldownIntervalRef.current);
+      }
+      if (reactionSentTimerRef.current) {
+        clearTimeout(reactionSentTimerRef.current);
       }
     };
   }, []);
@@ -688,6 +753,17 @@ export function useRemoteTransport() {
       clearTimeout(pairingPollTimerRef.current);
       pairingPollTimerRef.current = null;
     }
+    if (reactionCooldownIntervalRef.current) {
+      clearInterval(reactionCooldownIntervalRef.current);
+      reactionCooldownIntervalRef.current = null;
+    }
+    if (reactionSentTimerRef.current) {
+      clearTimeout(reactionSentTimerRef.current);
+      reactionSentTimerRef.current = null;
+    }
+    reactionCooldownEndTimeRef.current = 0;
+    setReactionCooldownRemainingMs(0);
+    setLastSentReaction(null);
     PairingStorage.clearCredentials();
     transportRef.current?.setCredentials(null);
     transportRef.current?.disconnect();
@@ -718,10 +794,13 @@ export function useRemoteTransport() {
     isMicActionPending,
     isCameraActionPending,
     isHandActionPending,
+    reactionCooldownRemainingMs,
+    lastSentReaction,
     showCameraSafetyModal,
     setMicrophoneState,
     setCameraState,
     setHandState,
+    sendReaction,
     confirmCameraSafety,
     cancelCameraSafety,
     startPairing,

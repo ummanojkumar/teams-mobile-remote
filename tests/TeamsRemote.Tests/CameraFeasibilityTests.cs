@@ -99,6 +99,12 @@ public class CameraFeasibilityTests
         public Task<HandCommandResult> SetHandStateAsync(DesiredHandState desiredState, CancellationToken cancellationToken = default) =>
             throw new NotImplementedException();
 
+        public Task<ReactionDiagnosticReport> ObserveReactionsAsync(TimeSpan duration, Action<string>? onProgressMessage = null, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ReactionDiagnosticReport());
+
+        public Task<ReactionCommandResult> SendReactionAsync(string reaction, CancellationToken cancellationToken = default) =>
+            throw new NotImplementedException();
+
         public void Dispose() { }
 
         private class SubscriptionToken : IDisposable

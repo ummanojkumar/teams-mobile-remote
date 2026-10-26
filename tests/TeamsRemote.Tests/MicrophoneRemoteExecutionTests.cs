@@ -52,6 +52,12 @@ public class MicrophoneRemoteExecutionTests
         public Task<HandCommandResult> SetHandStateAsync(DesiredHandState desired, CancellationToken cancellationToken = default) =>
             throw new NotImplementedException();
 
+        public Task<ReactionDiagnosticReport> ObserveReactionsAsync(TimeSpan duration, Action<string>? onProgressMessage = null, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ReactionDiagnosticReport());
+
+        public Task<ReactionCommandResult> SendReactionAsync(string reaction, CancellationToken cancellationToken = default) =>
+            throw new NotImplementedException();
+
         public void Dispose() { }
     }
 

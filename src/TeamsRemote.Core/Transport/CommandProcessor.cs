@@ -1,6 +1,7 @@
 using TeamsRemote.Core.Abstractions;
 using TeamsRemote.Core.Models;
 using TeamsRemote.Core.Protocol;
+using TeamsRemote.Core.Security;
 using TeamsRemote.Core.State;
 
 namespace TeamsRemote.Core.Transport;
@@ -10,6 +11,7 @@ public sealed class CommandProcessor
     private readonly MeetingStateStore _stateStore;
     private readonly CommandDeduplicator _deduplicator;
     private readonly CommandRateLimiter _rateLimiter;
+    private readonly ReactionRateLimiter _reactionRateLimiter;
     private readonly Func<Guid?> _getActiveDeviceIdFunc;
     private readonly ITeamsController? _teamsController;
 
@@ -18,13 +20,15 @@ public sealed class CommandProcessor
         Func<Guid?> getActiveDeviceIdFunc,
         ITeamsController? teamsController = null,
         CommandDeduplicator? deduplicator = null,
-        CommandRateLimiter? rateLimiter = null)
+        CommandRateLimiter? rateLimiter = null,
+        ReactionRateLimiter? reactionRateLimiter = null)
     {
         _stateStore = stateStore;
         _getActiveDeviceIdFunc = getActiveDeviceIdFunc;
         _teamsController = teamsController;
         _deduplicator = deduplicator ?? new CommandDeduplicator();
         _rateLimiter = rateLimiter ?? new CommandRateLimiter();
+        _reactionRateLimiter = reactionRateLimiter ?? new ReactionRateLimiter();
     }
 
     public ProtocolEnvelope ProcessEnvelope(ProtocolEnvelope envelope)
@@ -629,6 +633,106 @@ public sealed class CommandProcessor
                 catch (Exception ex)
                 {
                     _stateStore.MarkHandStaleOrUncertain();
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "failed",
+                        StateRevision = _stateStore.StateRevision,
+                        ErrorCode = ProtocolErrorCodes.InvokeFailed,
+                        Reason = ex.Message
+                    };
+                }
+                break;
+
+            case "send_reaction":
+                var targetReaction = cmdPayload.Reaction?.Trim().ToLowerInvariant();
+                if (!ReactionTypes.IsValid(targetReaction))
+                {
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "rejected",
+                        StateRevision = _stateStore.StateRevision,
+                        ErrorCode = ProtocolErrorCodes.InvalidDesiredState,
+                        Reason = $"Invalid reaction '{cmdPayload.Reaction}'. Expected one of: like, love, applause, laugh, surprise."
+                    };
+                    break;
+                }
+
+                var rateLimitResult = _reactionRateLimiter.CheckAndRecord(envelope.DeviceId);
+                if (!rateLimitResult.Allowed)
+                {
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "rejected",
+                        StateRevision = _stateStore.StateRevision,
+                        ErrorCode = ProtocolErrorCodes.RateLimited,
+                        Reason = rateLimitResult.Reason ?? "Reaction rate limit exceeded."
+                    };
+                    break;
+                }
+
+                if (_teamsController == null)
+                {
+                    execResult = new CommandResultPayload
+                    {
+                        Status = "unsupported",
+                        StateRevision = _stateStore.StateRevision,
+                        ErrorCode = ProtocolErrorCodes.ControlNotFound,
+                        Reason = "No Teams controller available to execute remote reaction command."
+                    };
+                    break;
+                }
+
+                try
+                {
+                    var actionResult = await _teamsController.SendReactionAsync(targetReaction!, cancellationToken);
+                    switch (actionResult.Status)
+                    {
+                        case CommandExecutionStatus.Confirmed:
+                            execResult = new CommandResultPayload
+                            {
+                                Status = "confirmed",
+                                StateRevision = _stateStore.StateRevision,
+                                Reason = actionResult.Reason,
+                                State = new Dictionary<string, string>
+                                {
+                                    ["reaction"] = targetReaction!
+                                }
+                            };
+                            break;
+
+                        case CommandExecutionStatus.Unsupported:
+                            execResult = new CommandResultPayload
+                            {
+                                Status = "unsupported",
+                                StateRevision = _stateStore.StateRevision,
+                                ErrorCode = actionResult.ErrorCode ?? ProtocolErrorCodes.ControlNotFound,
+                                Reason = actionResult.Reason
+                            };
+                            break;
+
+                        case CommandExecutionStatus.Rejected:
+                            execResult = new CommandResultPayload
+                            {
+                                Status = "rejected",
+                                StateRevision = _stateStore.StateRevision,
+                                ErrorCode = actionResult.ErrorCode ?? ProtocolErrorCodes.PolicyRestricted,
+                                Reason = actionResult.Reason
+                            };
+                            break;
+
+                        default:
+                            execResult = new CommandResultPayload
+                            {
+                                Status = "failed",
+                                StateRevision = _stateStore.StateRevision,
+                                ErrorCode = actionResult.ErrorCode ?? ProtocolErrorCodes.InvokeFailed,
+                                Reason = actionResult.Reason
+                            };
+                            break;
+                    }
+                }
+                catch (Exception ex)
+                {
                     execResult = new CommandResultPayload
                     {
                         Status = "failed",

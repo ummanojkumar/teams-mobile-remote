@@ -6,6 +6,7 @@ using FlaUI.UIA3;
 using TeamsRemote.Core.Abstractions;
 using TeamsRemote.Core.Classification;
 using TeamsRemote.Core.Models;
+using TeamsRemote.Core.Protocol;
 using TeamsRemote.Core.Redaction;
 
 namespace TeamsRemote.Core.Adapters;
@@ -1004,6 +1005,534 @@ public sealed class UiaTeamsController : ITeamsController
             CapabilityTier = ControlCapabilityTier.Unavailable,
             Reason = reason
         };
+    }
+
+    /// <summary>
+    /// Passively observes the Teams Live Reactions toolbar and flyout menu elements during a user-assisted observation session.
+    /// Strictly read-only: does not invoke the React launcher or any emoji buttons.
+    /// </summary>
+    public async Task<ReactionDiagnosticReport> ObserveReactionsAsync(
+        TimeSpan duration,
+        Action<string>? onProgressMessage = null,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+
+        var processInfo = DetectTeamsProcess();
+        if (!processInfo.IsRunning || processInfo.AllProcessIds.Count == 0)
+        {
+            return new ReactionDiagnosticReport
+            {
+                MeetingDetected = false,
+                PolicyStatus = ReactionPolicyStatus.Unknown,
+                PolicyReason = "Teams process is not running"
+            };
+        }
+
+        var (surface, meetingWindow) = FindMeetingSurface(processInfo.AllProcessIds);
+        if (!surface.IsDetected || meetingWindow == null)
+        {
+            return new ReactionDiagnosticReport
+            {
+                MeetingDetected = false,
+                PolicyStatus = ReactionPolicyStatus.Unknown,
+                PolicyReason = "No active Teams meeting surface detected"
+            };
+        }
+
+        // 1. Discover React Toolbar Launcher (Read-Only)
+        var launcher = FindReactionLauncher(meetingWindow);
+        bool launcherFound = launcher != null;
+        string? launcherName = launcher?.Properties.Name.ValueOrDefault;
+        string? launcherAutoId = launcher?.Properties.AutomationId.ValueOrDefault;
+        string? launcherControlType = launcher?.Properties.ControlType.ValueOrDefault.ToString();
+        bool launcherSupportsExpandCollapse = launcher != null && launcher.Patterns.ExpandCollapse.IsSupported;
+        bool launcherIsEnabled = launcher?.Properties.IsEnabled.ValueOrDefault ?? false;
+        string? launcherHelpText = launcher?.Properties.HelpText.ValueOrDefault;
+
+        onProgressMessage?.Invoke(launcherFound
+            ? $"React launcher detected: '{launcherName}' ({launcherAutoId}). Waiting for user to manually open the menu..."
+            : "React launcher not found on meeting toolbar. Scanning for reactions menu...");
+
+        // Check if launcher HelpText indicates reactions are disabled by policy
+        string policyStatus = ReactionPolicyStatus.Unknown;
+        string? policyReason = null;
+        if (launcherHelpText != null && launcherHelpText.Contains("turned off", StringComparison.OrdinalIgnoreCase))
+        {
+            policyStatus = ReactionPolicyStatus.PolicyDisabled;
+            policyReason = launcherHelpText;
+        }
+
+        var discoveredReactions = new Dictionary<string, ReactionControlElementInfo>(StringComparer.OrdinalIgnoreCase);
+        var observedEvents = new List<string>();
+        bool flyoutObserved = false;
+        string? flyoutHostingType = null;
+
+        var deadline = DateTimeOffset.UtcNow + duration;
+        var cf = _automation.ConditionFactory;
+
+        while (DateTimeOffset.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
+        {
+            // Search A: In-Tree Children of meetingWindow
+            var inTreeReactionElements = ScanForReactionButtons(meetingWindow);
+            if (inTreeReactionElements.Count > 0)
+            {
+                flyoutObserved = true;
+                flyoutHostingType = "InTreeChild";
+                foreach (var (rType, elInfo) in inTreeReactionElements)
+                {
+                    discoveredReactions[rType] = elInfo;
+                }
+            }
+
+            // Search B: Separate Top-Level Popup Windows (e.g. Chrome_WidgetWin_1 panes owned by Teams)
+            if (discoveredReactions.Count < 5 && processInfo.AllProcessIds.Count > 0)
+            {
+                try
+                {
+                    var desktop = _automation.GetDesktop();
+                    var popups = desktop.FindAllChildren(cf.ByProcessId(processInfo.AllProcessIds[0]));
+                    foreach (var popup in popups)
+                    {
+                        if (popup.Equals(meetingWindow)) continue;
+                        var popupReactionElements = ScanForReactionButtons(popup);
+                        if (popupReactionElements.Count > 0)
+                        {
+                            flyoutObserved = true;
+                            flyoutHostingType = "TopLevelPopup";
+                            foreach (var (rType, elInfo) in popupReactionElements)
+                            {
+                                discoveredReactions[rType] = elInfo;
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    // Ignore stale popup window exceptions
+                }
+            }
+
+            if (discoveredReactions.Count >= 5)
+            {
+                onProgressMessage?.Invoke($"All 5 reactions discovered! (Like, Love, Applause, Laugh, Surprise).");
+                break;
+            }
+
+            try
+            {
+                await Task.Delay(250, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+        }
+
+        if (policyStatus == ReactionPolicyStatus.Unknown)
+        {
+            if (discoveredReactions.Count > 0)
+            {
+                policyStatus = ReactionPolicyStatus.Enabled;
+            }
+            else if (launcherFound && !launcherIsEnabled)
+            {
+                policyStatus = ReactionPolicyStatus.PolicyDisabled;
+                policyReason = "Reactions button is disabled";
+            }
+        }
+
+        return new ReactionDiagnosticReport
+        {
+            MeetingDetected = true,
+            ReactLauncherFound = launcherFound,
+            LauncherName = launcherName,
+            LauncherAutomationId = launcherAutoId,
+            LauncherControlType = launcherControlType,
+            LauncherSupportsExpandCollapse = launcherSupportsExpandCollapse,
+            LauncherIsEnabled = launcherIsEnabled,
+            FlyoutObserved = flyoutObserved,
+            FlyoutHostingType = flyoutHostingType,
+            PolicyStatus = policyStatus,
+            PolicyReason = policyReason,
+            DiscoveredReactions = discoveredReactions.Values.ToList(),
+            ObservedEvents = observedEvents,
+            ObservedAt = DateTimeOffset.UtcNow
+        };
+    }
+
+    /// <summary>
+    /// Executes a remote Live Reaction invocation (like, love, applause, laugh, surprise).
+    /// Opens the reactions flyout if needed, locates the target button, and triggers it via InvokePattern.
+    /// </summary>
+    public async Task<ReactionCommandResult> SendReactionAsync(
+        string reaction,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+
+        var sw = Stopwatch.StartNew();
+
+        if (!ReactionTypes.IsValid(reaction))
+        {
+            return new ReactionCommandResult
+            {
+                Status = CommandExecutionStatus.Rejected,
+                Reaction = reaction,
+                ErrorCode = ProtocolErrorCodes.InvalidDesiredState,
+                Reason = $"Invalid reaction '{reaction}'. Expected one of: like, love, applause, laugh, surprise.",
+                Duration = sw.Elapsed
+            };
+        }
+
+        await _actionLock.WaitAsync(cancellationToken);
+        try
+        {
+            var processInfo = DetectTeamsProcess();
+            if (!processInfo.IsRunning || processInfo.AllProcessIds.Count == 0)
+            {
+                return new ReactionCommandResult
+                {
+                    Status = CommandExecutionStatus.Failed,
+                    Reaction = reaction,
+                    ErrorCode = ProtocolErrorCodes.NoActiveMeeting,
+                    Reason = "Teams process is not running.",
+                    Duration = sw.Elapsed
+                };
+            }
+
+            var (surface, meetingWindow) = FindMeetingSurface(processInfo.AllProcessIds);
+            if (!surface.IsDetected || meetingWindow == null)
+            {
+                return new ReactionCommandResult
+                {
+                    Status = CommandExecutionStatus.Failed,
+                    Reaction = reaction,
+                    ErrorCode = ProtocolErrorCodes.NoActiveMeeting,
+                    Reason = "No active Teams meeting surface detected.",
+                    Duration = sw.Elapsed
+                };
+            }
+
+            // 1. Check if flyout is already open and contains target button
+            AutomationElement? targetButton = FindReactionButtonElement(meetingWindow, reaction);
+
+            if (targetButton == null && processInfo.AllProcessIds.Count > 0)
+            {
+                var desktop = _automation.GetDesktop();
+                var cf = _automation.ConditionFactory;
+                var popups = desktop.FindAllChildren(cf.ByProcessId(processInfo.AllProcessIds[0]));
+                foreach (var popup in popups)
+                {
+                    if (popup.Equals(meetingWindow)) continue;
+                    targetButton = FindReactionButtonElement(popup, reaction);
+                    if (targetButton != null) break;
+                }
+            }
+
+            // 2. If not already open, locate reaction launcher and open menu
+            if (targetButton == null)
+            {
+                var launcher = FindReactionLauncher(meetingWindow);
+                if (launcher == null)
+                {
+                    return new ReactionCommandResult
+                    {
+                        Status = CommandExecutionStatus.Failed,
+                        Reaction = reaction,
+                        ErrorCode = ProtocolErrorCodes.ControlNotFound,
+                        Reason = "Reactions toolbar launcher not found.",
+                        Duration = sw.Elapsed
+                    };
+                }
+
+                if (!launcher.Properties.IsEnabled.ValueOrDefault)
+                {
+                    return new ReactionCommandResult
+                    {
+                        Status = CommandExecutionStatus.Rejected,
+                        Reaction = reaction,
+                        ErrorCode = ProtocolErrorCodes.PolicyRestricted,
+                        Reason = "Reactions are disabled by meeting policy.",
+                        Duration = sw.Elapsed
+                    };
+                }
+
+                // Open the flyout using ExpandCollapsePattern or InvokePattern
+                bool opened = false;
+                if (launcher.Patterns.ExpandCollapse.IsSupported)
+                {
+                    launcher.Patterns.ExpandCollapse.Pattern.Expand();
+                    opened = true;
+                }
+                else if (launcher.Patterns.Invoke.IsSupported)
+                {
+                    launcher.Patterns.Invoke.Pattern.Invoke();
+                    opened = true;
+                }
+
+                if (!opened)
+                {
+                    return new ReactionCommandResult
+                    {
+                        Status = CommandExecutionStatus.Failed,
+                        Reaction = reaction,
+                        ErrorCode = ProtocolErrorCodes.InvokeFailed,
+                        Reason = "Reactions launcher does not support ExpandCollapse or Invoke patterns.",
+                        Duration = sw.Elapsed
+                    };
+                }
+
+                // Wait briefly for flyout to mount
+                await Task.Delay(200, cancellationToken);
+
+                // Scan again for target button
+                targetButton = FindReactionButtonElement(meetingWindow, reaction);
+                if (targetButton == null && processInfo.AllProcessIds.Count > 0)
+                {
+                    var desktop = _automation.GetDesktop();
+                    var cf = _automation.ConditionFactory;
+                    var popups = desktop.FindAllChildren(cf.ByProcessId(processInfo.AllProcessIds[0]));
+                    foreach (var popup in popups)
+                    {
+                        if (popup.Equals(meetingWindow)) continue;
+                        targetButton = FindReactionButtonElement(popup, reaction);
+                        if (targetButton != null) break;
+                    }
+                }
+            }
+
+            if (targetButton == null)
+            {
+                return new ReactionCommandResult
+                {
+                    Status = CommandExecutionStatus.Failed,
+                    Reaction = reaction,
+                    ErrorCode = ProtocolErrorCodes.ControlNotFound,
+                    Reason = $"Reaction button '{reaction}' could not be located in reactions menu.",
+                    Duration = sw.Elapsed
+                };
+            }
+
+            if (!targetButton.Properties.IsEnabled.ValueOrDefault)
+            {
+                return new ReactionCommandResult
+                {
+                    Status = CommandExecutionStatus.Rejected,
+                    Reaction = reaction,
+                    ErrorCode = ProtocolErrorCodes.PolicyRestricted,
+                    Reason = $"Reaction button '{reaction}' is disabled by meeting policy.",
+                    Duration = sw.Elapsed
+                };
+            }
+
+            if (!targetButton.Patterns.Invoke.IsSupported)
+            {
+                return new ReactionCommandResult
+                {
+                    Status = CommandExecutionStatus.Failed,
+                    Reaction = reaction,
+                    ErrorCode = ProtocolErrorCodes.InvokeFailed,
+                    Reason = $"Reaction button '{reaction}' does not support InvokePattern.",
+                    Duration = sw.Elapsed
+                };
+            }
+
+            // 3. Execute UIA Invoke
+            targetButton.Patterns.Invoke.Pattern.Invoke();
+
+            return new ReactionCommandResult
+            {
+                Status = CommandExecutionStatus.Confirmed,
+                Reaction = reaction,
+                Reason = $"Reaction '{reaction}' sent successfully.",
+                Duration = sw.Elapsed
+            };
+        }
+        catch (Exception ex)
+        {
+            return new ReactionCommandResult
+            {
+                Status = CommandExecutionStatus.Failed,
+                Reaction = reaction,
+                ErrorCode = ProtocolErrorCodes.InvokeFailed,
+                Reason = $"Failed to invoke reaction '{reaction}': {RedactionHelper.RedactSecrets(ex.Message)}",
+                Duration = sw.Elapsed
+            };
+        }
+        finally
+        {
+            _actionLock.Release();
+        }
+    }
+
+    private static AutomationElement? FindReactionButtonElement(AutomationElement container, string targetReaction)
+    {
+        try
+        {
+            var cf = container.Automation.ConditionFactory;
+            var candidates = container.FindAllDescendants(
+                cf.ByControlType(ControlType.Button).Or(cf.ByControlType(ControlType.MenuItem)));
+
+            foreach (var item in candidates)
+            {
+                try
+                {
+                    string name = item.Properties.Name.ValueOrDefault ?? string.Empty;
+                    string autoId = item.Properties.AutomationId.ValueOrDefault ?? string.Empty;
+                    string? rType = ClassifyReactionType(name, autoId);
+
+                    if (string.Equals(rType, targetReaction, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return item;
+                    }
+                }
+                catch
+                {
+                    // Stale element
+                }
+            }
+        }
+        catch
+        {
+            // Crawl error
+        }
+
+        return null;
+    }
+
+    private AutomationElement? FindReactionLauncher(AutomationElement rootWindow)
+    {
+        try
+        {
+            var cf = _automation.ConditionFactory;
+            var buttons = rootWindow.FindAllDescendants(cf.ByControlType(ControlType.Button)
+                .Or(cf.ByControlType(ControlType.SplitButton))
+                .Or(cf.ByControlType(ControlType.MenuItem)));
+
+            foreach (var btn in buttons)
+            {
+                try
+                {
+                    string name = btn.Properties.Name.ValueOrDefault ?? string.Empty;
+                    string autoId = btn.Properties.AutomationId.ValueOrDefault ?? string.Empty;
+
+                    if (IsReactionLauncher(name, autoId))
+                    {
+                        return btn;
+                    }
+                }
+                catch
+                {
+                    // Ignore stale element
+                }
+            }
+        }
+        catch
+        {
+            // Ignore crawl errors
+        }
+
+        return null;
+    }
+
+    public static bool IsReactionLauncher(string name, string autoId)
+    {
+        string n = name.ToLowerInvariant();
+        string id = autoId.ToLowerInvariant();
+
+        return id.Contains("reactions-button") ||
+               id.Contains("calling-reaction-bar") ||
+               id.Contains("reaction-button") ||
+               n.Contains("react and raise hand") ||
+               n.Equals("reactions") ||
+               n.Equals("react") ||
+               n.Contains("show reactions");
+    }
+
+    private static Dictionary<string, ReactionControlElementInfo> ScanForReactionButtons(AutomationElement container)
+    {
+        var result = new Dictionary<string, ReactionControlElementInfo>(StringComparer.OrdinalIgnoreCase);
+
+        try
+        {
+            var cf = container.Automation.ConditionFactory;
+            var candidates = container.FindAllDescendants(
+                cf.ByControlType(ControlType.Button).Or(cf.ByControlType(ControlType.MenuItem)));
+
+            foreach (var item in candidates)
+            {
+                try
+                {
+                    string name = item.Properties.Name.ValueOrDefault ?? string.Empty;
+                    string autoId = item.Properties.AutomationId.ValueOrDefault ?? string.Empty;
+                    string? rType = ClassifyReactionType(name, autoId);
+
+                    if (rType != null && !result.ContainsKey(rType))
+                    {
+                        result[rType] = new ReactionControlElementInfo
+                        {
+                            ReactionType = rType,
+                            AccessibleName = name,
+                            AutomationId = autoId,
+                            ControlType = item.Properties.ControlType.ValueOrDefault.ToString(),
+                            SupportsInvokePattern = item.Patterns.Invoke.IsSupported,
+                            IsEnabled = item.Properties.IsEnabled.ValueOrDefault,
+                            BoundingRectangle = item.Properties.BoundingRectangle.ValueOrDefault.ToString(),
+                            HelpText = item.Properties.HelpText.ValueOrDefault
+                        };
+                    }
+                }
+                catch
+                {
+                    // Ignore stale element
+                }
+            }
+        }
+        catch
+        {
+            // Ignore crawl errors
+        }
+
+        return result;
+    }
+
+    public static string? ClassifyReactionType(string name, string autoId)
+    {
+        string n = name.ToLowerInvariant();
+        string id = autoId.ToLowerInvariant();
+
+        // 1. Like
+        if (id.Contains("like") || n.StartsWith("like") || n.Contains("like (") || n.Contains("thumbs up"))
+        {
+            return ReactionTypes.Like;
+        }
+
+        // 2. Love / Heart
+        if (id.Contains("love") || id.Contains("heart") || n.StartsWith("love") || n.Contains("love (") || n.Contains("heart"))
+        {
+            return ReactionTypes.Love;
+        }
+
+        // 3. Applause / Clap
+        if (id.Contains("applause") || id.Contains("clap") || n.StartsWith("applause") || n.Contains("applause (") || n.Contains("clap"))
+        {
+            return ReactionTypes.Applause;
+        }
+
+        // 4. Laugh / Laughing
+        if (id.Contains("laugh") || n.StartsWith("laugh") || n.Contains("laugh (") || n.Contains("laughing"))
+        {
+            return ReactionTypes.Laugh;
+        }
+
+        // 5. Surprise / Wow
+        if (id.Contains("surprise") || id.Contains("wow") || n.StartsWith("surprise") || n.Contains("surprise (") || n.Contains("wow"))
+        {
+            return ReactionTypes.Surprise;
+        }
+
+        return null;
     }
 
     private void ThrowIfDisposed()

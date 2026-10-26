@@ -302,6 +302,32 @@ export class TransportClient {
   }
 
   /**
+   * Phase 6B: Remote Teams Live Reaction Control
+   * Dispatches one-shot transient reaction command: 'like' | 'love' | 'applause' | 'laugh' | 'surprise'.
+   */
+  sendReaction(
+    reaction: string,
+    messageId?: string,
+    correlationId?: string
+  ): boolean {
+    if (!this.hasValidCredentials()) return false;
+    const msgId = messageId || generateUuid();
+    const corrId = correlationId || msgId;
+
+    const envelope = createEnvelope(
+      'command',
+      {
+        command: 'send_reaction',
+        reaction,
+      },
+      this.getDeviceId(),
+      corrId,
+      msgId
+    );
+    return this.sendEnvelope(envelope);
+  }
+
+  /**
    * Unknown/unsupported command guard.
    */
   sendRemoteControlCommand(command: string): never {
@@ -319,6 +345,9 @@ export class TransportClient {
     }
     if (command === 'set_hand' && (desired === 'raised' || desired === 'lowered')) {
       return this.sendSetHand(desired, expectedStateRevision);
+    }
+    if (command === 'send_reaction' && desired) {
+      return this.sendReaction(desired);
     }
     return this.sendRemoteControlCommand(command);
   }

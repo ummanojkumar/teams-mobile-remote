@@ -36,6 +36,7 @@ public sealed class CompanionMainForm : Form
     private Button _btnScan = null!;
     private Button _btnMute = null!;
     private Button _btnUnmute = null!;
+    private Button _btnObserveReactions = null!;
 
     private Label _lblRelayStatus = null!;
     private Label _lblPairedDevice = null!;
@@ -67,6 +68,7 @@ public sealed class CompanionMainForm : Form
         _trayMenu = new ContextMenuStrip();
         _trayMenu.Items.Add("Show Companion", null, (s, e) => ShowAndRestore());
         _trayMenu.Items.Add("Scan Teams", null, async (s, e) => await ScanTeamsAsync());
+        _trayMenu.Items.Add("Observe Live Reactions (User-Assisted)", null, async (s, e) => await ObserveLiveReactionsAsync());
         _trayMenu.Items.Add(new ToolStripSeparator());
         _trayMenu.Items.Add("Exit", null, (s, e) => ExitApplication());
 
@@ -282,9 +284,21 @@ public sealed class CompanionMainForm : Form
         };
         _btnUnmute.Click += async (s, e) => await SetMicrophoneAsync(DesiredMicrophoneState.Unmuted);
 
+        _btnObserveReactions = new Button
+        {
+            Text = "✨ Observe Reactions",
+            Height = 36,
+            Width = 155,
+            BackColor = Color.FromArgb(108, 117, 125),
+            ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat
+        };
+        _btnObserveReactions.Click += async (s, e) => await ObserveLiveReactionsAsync();
+
         pnlButtons.Controls.Add(_btnScan);
         pnlButtons.Controls.Add(_btnMute);
         pnlButtons.Controls.Add(_btnUnmute);
+        pnlButtons.Controls.Add(_btnObserveReactions);
         mainLayout.Controls.Add(pnlButtons, 0, 2);
 
         // Group 4: Transport & Pairing
@@ -527,6 +541,50 @@ public sealed class CompanionMainForm : Form
         catch (Exception ex)
         {
             LogMessage($"Scan failed: {RedactionHelper.RedactSecrets(ex.Message)}");
+        }
+    }
+
+    private async Task ObserveLiveReactionsAsync()
+    {
+        if (_isActionInProgress) return;
+
+        LogMessage("=== Phase 6A: User-Assisted Live Reactions Observation (Read-Only) ===");
+        LogMessage("INSTRUCTIONS: Please manually hover over or click 'React and raise hand' in your Teams meeting window to open the reactions menu...");
+
+        try
+        {
+            var report = await _controller.ObserveReactionsAsync(
+                TimeSpan.FromSeconds(10),
+                msg => LogMessage($"[REACTION OBSERVER] {msg}"));
+
+            if (!report.MeetingDetected)
+            {
+                LogMessage("Observation finished: No active Teams meeting window detected.");
+                return;
+            }
+
+            LogMessage($"Launcher Found: {report.ReactLauncherFound} (Name: '{report.LauncherName}', ID: '{report.LauncherAutomationId}', Type: {report.LauncherControlType}, Enabled: {report.LauncherIsEnabled})");
+            LogMessage($"Flyout Observed: {report.FlyoutObserved} (Hosting: {report.FlyoutHostingType ?? "None"})");
+            LogMessage($"Policy Status: {report.PolicyStatus} {(report.PolicyReason != null ? $"({report.PolicyReason})" : "")}");
+
+            if (report.DiscoveredReactions.Count > 0)
+            {
+                LogMessage($"Discovered {report.DiscoveredReactions.Count} Reaction Controls:");
+                foreach (var r in report.DiscoveredReactions)
+                {
+                    LogMessage($"  - [{r.ReactionType.ToUpperInvariant()}] Name: '{r.AccessibleName}', AutoId: '{r.AutomationId}', Type: {r.ControlType}, InvokePattern: {r.SupportsInvokePattern}, Enabled: {r.IsEnabled}, Bounds: {r.BoundingRectangle}");
+                }
+            }
+            else
+            {
+                LogMessage("No reaction buttons discovered in tree during observation window. Ensure the reaction flyout menu was opened in Teams.");
+            }
+
+            LogMessage("=== Phase 6A Observation Complete (Genuinely Read-Only) ===");
+        }
+        catch (Exception ex)
+        {
+            LogMessage($"Reaction observation failed: {RedactionHelper.RedactSecrets(ex.Message)}");
         }
     }
 

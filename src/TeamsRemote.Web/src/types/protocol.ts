@@ -23,6 +23,8 @@ export const ProtocolErrorCodes = {
   RateLimited: 'RATE_LIMITED',
   StaleCommand: 'STALE_COMMAND',
   InvalidStateRevision: 'INVALID_STATE_REVISION',
+  PolicyRestricted: 'POLICY_RESTRICTED',
+  InvalidDesiredState: 'INVALID_DESIRED_STATE',
   PayloadTooLarge: 'PAYLOAD_TOO_LARGE',
   UnsupportedProtocolVersion: 'UNSUPPORTED_PROTOCOL_VERSION',
   InvalidEnvelope: 'INVALID_ENVELOPE',
@@ -30,6 +32,16 @@ export const ProtocolErrorCodes = {
 } as const;
 
 export type ProtocolErrorCode = typeof ProtocolErrorCodes[keyof typeof ProtocolErrorCodes];
+
+export const ReactionTypes = {
+  Like: 'like',
+  Love: 'love',
+  Applause: 'applause',
+  Laugh: 'laugh',
+  Surprise: 'surprise',
+} as const;
+
+export type ReactionType = typeof ReactionTypes[keyof typeof ReactionTypes];
 
 export interface ProtocolEnvelope<T = unknown> {
   version: number;
@@ -46,6 +58,7 @@ export interface CommandPayload {
   desired?: string;
   expectedStateRevision?: number;
   echoText?: string;
+  reaction?: string;
 }
 
 export interface CommandResultPayload {

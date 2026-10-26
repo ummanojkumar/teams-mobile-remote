@@ -52,6 +52,10 @@ public class HandRemoteExecutionTests
         public IDisposable? SubscribeMicrophoneStateChanged(Action onStateChangeDetected) => null;
         public IDisposable? SubscribeCameraStateChanged(Action onStateChangeDetected) => null;
         public IDisposable? SubscribeHandStateChanged(Action onStateChangeDetected) => null;
+        public Task<ReactionDiagnosticReport> ObserveReactionsAsync(TimeSpan duration, Action<string>? onProgressMessage = null, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ReactionDiagnosticReport());
+        public Task<ReactionCommandResult> SendReactionAsync(string reaction, CancellationToken cancellationToken = default) =>
+            throw new NotImplementedException();
         public void Dispose() { }
     }
 
