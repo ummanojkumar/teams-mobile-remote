@@ -668,10 +668,10 @@ export function useRemoteTransport() {
         return;
       }
 
-      // Start 2000ms cooldown immediately
-      const cooldownEnd = now + 2000;
+      // Start 500ms (0.5 sec) cooldown immediately
+      const cooldownEnd = now + 500;
       reactionCooldownEndTimeRef.current = cooldownEnd;
-      setReactionCooldownRemainingMs(2000);
+      setReactionCooldownRemainingMs(500);
       setLastSentReaction(reaction);
 
       if (reactionCooldownIntervalRef.current) {
@@ -686,14 +686,14 @@ export function useRemoteTransport() {
             reactionCooldownIntervalRef.current = null;
           }
         }
-      }, 100);
+      }, 50);
 
       if (reactionSentTimerRef.current) {
         clearTimeout(reactionSentTimerRef.current);
       }
       reactionSentTimerRef.current = setTimeout(() => {
         setLastSentReaction(null);
-      }, 2500);
+      }, 1000);
 
       const messageId = generateUuid();
       const correlationId = generateUuid();

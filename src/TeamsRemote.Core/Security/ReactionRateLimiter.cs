@@ -29,14 +29,14 @@ public sealed class ReactionRateLimiter
 
     public ReactionRateLimiter(
         TimeSpan? perDeviceCooldown = null,
-        int maxBurstCount = 3,
+        int maxBurstCount = 10,
         TimeSpan? burstWindow = null,
         TimeSpan? globalCooldown = null)
     {
-        _perDeviceCooldown = perDeviceCooldown ?? TimeSpan.FromSeconds(2);
+        _perDeviceCooldown = perDeviceCooldown ?? TimeSpan.FromMilliseconds(500);
         _maxBurstCount = maxBurstCount;
         _burstWindow = burstWindow ?? TimeSpan.FromSeconds(10);
-        _globalCooldown = globalCooldown ?? TimeSpan.FromMilliseconds(1500);
+        _globalCooldown = globalCooldown ?? TimeSpan.FromMilliseconds(400);
     }
 
     public ReactionRateLimitResult CheckAndRecord(Guid deviceId)

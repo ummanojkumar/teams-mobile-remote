@@ -94,7 +94,7 @@ describe('Phase 6B Live Reactions Integration Flow', () => {
     expect(result.current.state.controls.hand.value).toBe('lowered');
   });
 
-  it('Anti-spam: drops duplicate or rapid reaction clicks during 2000ms cooldown window', () => {
+  it('Anti-spam: drops duplicate or rapid reaction clicks during 500ms cooldown window', () => {
     const { result } = renderHook(() => useRemoteTransport());
     const transportClient = mockTransportInstances[0];
 
