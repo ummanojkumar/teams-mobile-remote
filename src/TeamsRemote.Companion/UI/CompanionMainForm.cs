@@ -1,7 +1,12 @@
+using System.Diagnostics;
 using System.Drawing;
 using System.Text.Json;
 using System.Windows.Forms;
 using QRCoder;
+using TeamsRemote.Companion.AppHost;
+using TeamsRemote.Companion.Network;
+using TeamsRemote.Companion.Security;
+using TeamsRemote.Companion.Settings;
 using TeamsRemote.Core.Abstractions;
 using TeamsRemote.Core.Adapters;
 using TeamsRemote.Core.Models;
@@ -16,6 +21,7 @@ namespace TeamsRemote.Companion.UI;
 
 public sealed class CompanionMainForm : Form
 {
+    private readonly EmbeddedRelayHost _relayHost;
     private readonly ITeamsController _controller;
     private readonly MeetingStateStore _stateStore;
     private readonly IDeviceCredentialStore _credentialStore;
@@ -23,10 +29,16 @@ public sealed class CompanionMainForm : Form
     private readonly CommandProcessor _commandProcessor;
     private readonly ConnectionClient _connectionClient;
     private readonly TeamsPassiveStateObserver _passiveObserver;
+    private readonly CompanionSettingsManager _settingsManager;
+    private readonly WindowsFirewallService _firewallService;
     private readonly NotifyIcon _trayIcon;
     private readonly ContextMenuStrip _trayMenu;
 
     private readonly Uri _relayUri = new("ws://127.0.0.1:5100/ws/companion");
+
+    private CompanionSettings _settings = new();
+    private IReadOnlyList<NetworkAdapterInfo> _availableAdapters = Array.Empty<NetworkAdapterInfo>();
+    private bool _isUpdatingLanSettingsUi;
 
     private Label _lblTeamsStatus = null!;
     private Label _lblMeetingStatus = null!;
@@ -42,6 +54,15 @@ public sealed class CompanionMainForm : Form
     private Label _lblPairedDevice = null!;
     private Button _btnPairPhone = null!;
     private Button _btnRevokePhone = null!;
+    private Button _btnOpenPwa = null!;
+
+    private CheckBox _chkEnableLan = null!;
+    private ComboBox _cmbAdapters = null!;
+    private Button _btnRefreshAdapters = null!;
+    private Label _lblLanStatus = null!;
+    private Label _lblPhoneUrl = null!;
+    private Button _btnCopyPhoneUrl = null!;
+    private Label _lblLanSecurityNotice = null!;
 
     private TextBox _txtLog = null!;
 
@@ -50,9 +71,12 @@ public sealed class CompanionMainForm : Form
 
     public CompanionMainForm()
     {
+        _relayHost = new EmbeddedRelayHost();
         _controller = new UiaTeamsController();
         _stateStore = new MeetingStateStore();
         _credentialStore = new DpapiDeviceStore();
+        _settingsManager = new CompanionSettingsManager();
+        _firewallService = new WindowsFirewallService();
 
         _pairingService = new PairingService(_credentialStore, ConfirmPairingDialogAsync);
         _commandProcessor = new CommandProcessor(_stateStore, () => _pairingService.ActiveDeviceId, _controller);
@@ -67,6 +91,8 @@ public sealed class CompanionMainForm : Form
         // Tray menu and icon
         _trayMenu = new ContextMenuStrip();
         _trayMenu.Items.Add("Show Companion", null, (s, e) => ShowAndRestore());
+        _trayMenu.Items.Add("Open Web Remote (PWA)", null, (s, e) => OpenWebRemoteInBrowser());
+        _trayMenu.Items.Add(new ToolStripSeparator());
         _trayMenu.Items.Add("Scan Teams", null, async (s, e) => await ScanTeamsAsync());
         _trayMenu.Items.Add("Observe Live Reactions (User-Assisted)", null, async (s, e) => await ObserveLiveReactionsAsync());
         _trayMenu.Items.Add(new ToolStripSeparator());
@@ -142,16 +168,60 @@ public sealed class CompanionMainForm : Form
             await ScanTeamsAsync();
             _passiveObserver.Start();
 
-            // Start outbound transport in background
+            // Start in-process relay and outbound transport
             _ = Task.Run(async () =>
             {
                 try
                 {
+                    _settings = await _settingsManager.LoadAsync();
+                    BeginInvoke(RefreshAdaptersList);
+
+                    // Startup cleanup of any orphaned firewall rule if LAN is disabled
+                    await _firewallService.StartupOrphanCleanupAsync(_settings.EnablePhoneAccess, msg => LogMessage(msg));
+
+                    if (_settings.EnablePhoneAccess && !string.IsNullOrWhiteSpace(_settings.SelectedIpAddress))
+                    {
+                        var matching = NetworkInterfaceScanner.GetPrivateRfc1918Adapters()
+                            .FirstOrDefault(a => a.IpAddressString == _settings.SelectedIpAddress);
+
+                        if (matching != null)
+                        {
+                            LogMessage($"[EMBEDDED-RELAY] Starting embedded Relay on http://127.0.0.1:5100 and http://{_settings.SelectedIpAddress}:5100...");
+                            await _relayHost.RebindAsync(_settings.SelectedIpAddress);
+                            UpdateLanStatusUi(true, _settings.SelectedIpAddress);
+                            LogMessage($"[EMBEDDED-RELAY] Active in Trusted Private-Network Mode (http://{_settings.SelectedIpAddress}:5100).");
+                        }
+                        else
+                        {
+                            LogMessage($"[EMBEDDED-RELAY] Saved adapter IP {_settings.SelectedIpAddress} not found on any active interface. Reverting to loopback.");
+                            _settings.EnablePhoneAccess = false;
+                            await _settingsManager.SaveAsync(_settings);
+                            await _relayHost.StartAsync();
+                            UpdateLanStatusUi(false, null);
+                        }
+                    }
+                    else
+                    {
+                        LogMessage("Starting in-process Relay server on http://127.0.0.1:5100...");
+                        await _relayHost.StartAsync();
+                        UpdateLanStatusUi(false, null);
+                    }
+
+                    bool healthy = await _relayHost.WaitForHealthAsync(TimeSpan.FromSeconds(6));
+                    if (healthy)
+                    {
+                        LogMessage("In-process Relay is healthy (PWA available).");
+                    }
+                    else
+                    {
+                        LogMessage("Warning: Relay health check timed out. Attempting transport connection...");
+                    }
+
                     await _connectionClient.StartAsync();
                 }
                 catch (Exception ex)
                 {
-                    LogMessage($"Transport client ended: {ex.Message}");
+                    LogMessage($"Relay host / transport client error: {ex.Message}");
                 }
             });
         };
@@ -159,9 +229,11 @@ public sealed class CompanionMainForm : Form
 
     private void InitializeFormComponents()
     {
-        Text = "Teams Mobile Remote — Companion (Phase 2)";
-        Size = new Size(650, 680);
-        MinimumSize = new Size(600, 600);
+        var asmVer = typeof(CompanionMainForm).Assembly.GetName().Version;
+        string verDisplay = asmVer != null ? $"v{asmVer.Major}.{asmVer.Minor}.{asmVer.Build}" : "v0.9.0-beta.1";
+        Text = $"Teams Mobile Remote — Companion ({verDisplay})";
+        Size = new Size(680, 800);
+        MinimumSize = new Size(640, 720);
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
         BackColor = Color.FromArgb(248, 249, 250);
@@ -170,14 +242,15 @@ public sealed class CompanionMainForm : Form
         {
             Dock = DockStyle.Fill,
             Padding = new Padding(16),
-            RowCount = 5,
+            RowCount = 6,
             ColumnCount = 1
         };
-        mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 80f));  // Status
-        mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 130f)); // Mic card
-        mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 45f));  // Mic buttons
-        mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 110f)); // Pairing & Transport
-        mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));  // Log
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 75f));  // 0: Status
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 120f)); // 1: Mic card
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 45f));  // 2: Mic buttons
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 105f)); // 3: Pairing & Transport
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 155f)); // 4: Mobile Phone Access (Trusted Private-Network Mode)
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));  // 5: Log
 
         // Group 1: Teams and Meeting Status
         var grpStatus = new GroupBox
@@ -346,13 +419,127 @@ public sealed class CompanionMainForm : Form
         };
         _btnRevokePhone.Click += async (s, e) => await RevokeActiveDeviceAsync();
 
+        _btnOpenPwa = new Button
+        {
+            Text = "🌐 Open Web Remote",
+            Location = new Point(292, 68),
+            Size = new Size(150, 32),
+            BackColor = Color.FromArgb(13, 110, 253),
+            ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat
+        };
+        _btnOpenPwa.Click += (s, e) => OpenWebRemoteInBrowser();
+
         grpPairing.Controls.Add(_lblRelayStatus);
         grpPairing.Controls.Add(_lblPairedDevice);
         grpPairing.Controls.Add(_btnPairPhone);
         grpPairing.Controls.Add(_btnRevokePhone);
+        grpPairing.Controls.Add(_btnOpenPwa);
         mainLayout.Controls.Add(grpPairing, 0, 3);
 
-        // Group 5: Activity Log
+        // Group 5: Mobile Phone Access (Private Wi-Fi / Trusted Private-Network Mode)
+        var grpLan = new GroupBox
+        {
+            Text = "Mobile Phone Access (Private Wi-Fi)",
+            Dock = DockStyle.Fill,
+            ForeColor = Color.FromArgb(33, 37, 41)
+        };
+
+        _chkEnableLan = new CheckBox
+        {
+            Text = "Enable Phone Access on Private Wi-Fi",
+            Location = new Point(16, 22),
+            AutoSize = true,
+            Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+            ForeColor = Color.FromArgb(33, 37, 41)
+        };
+        _chkEnableLan.CheckedChanged += OnEnableLanCheckedChanged;
+
+        var lblAdapter = new Label
+        {
+            Text = "Network Adapter:",
+            Location = new Point(16, 52),
+            AutoSize = true,
+            ForeColor = Color.FromArgb(73, 80, 87)
+        };
+
+        _cmbAdapters = new ComboBox
+        {
+            Location = new Point(135, 48),
+            Size = new Size(340, 28),
+            DropDownStyle = ComboBoxStyle.DropDownList
+        };
+        _cmbAdapters.SelectedIndexChanged += OnAdapterSelectedIndexChanged;
+
+        _btnRefreshAdapters = new Button
+        {
+            Text = "🔄 Refresh",
+            Location = new Point(485, 47),
+            Size = new Size(85, 29),
+            BackColor = Color.FromArgb(240, 240, 240),
+            FlatStyle = FlatStyle.Flat
+        };
+        _btnRefreshAdapters.Click += (s, e) => RefreshAdaptersList();
+
+        _lblLanStatus = new Label
+        {
+            Text = "Status: Loopback only (http://127.0.0.1:5100)",
+            Location = new Point(16, 82),
+            AutoSize = true,
+            Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+            ForeColor = Color.FromArgb(108, 117, 125)
+        };
+
+        _lblPhoneUrl = new Label
+        {
+            Text = "Phone URL: http://192.168.1.150:5100",
+            Location = new Point(16, 104),
+            AutoSize = true,
+            Font = new Font("Segoe UI", 9f, FontStyle.Regular),
+            ForeColor = Color.FromArgb(13, 110, 253),
+            Visible = false
+        };
+
+        _btnCopyPhoneUrl = new Button
+        {
+            Text = "📋 Copy URL",
+            Location = new Point(340, 100),
+            Size = new Size(95, 26),
+            BackColor = Color.FromArgb(13, 110, 253),
+            ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat,
+            Visible = false
+        };
+        _btnCopyPhoneUrl.Click += (s, e) =>
+        {
+            if (!string.IsNullOrWhiteSpace(_settings.SelectedIpAddress))
+            {
+                Clipboard.SetText($"http://{_settings.SelectedIpAddress}:5100");
+                MessageBox.Show($"Copied http://{_settings.SelectedIpAddress}:5100 to clipboard!", "Copied", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        };
+
+        _lblLanSecurityNotice = new Label
+        {
+            Text = "⚠️ Trusted Private-Network Mode: Unencrypted HTTP. Use only on private home/office Wi-Fi.",
+            Location = new Point(16, 128),
+            Size = new Size(620, 18),
+            Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
+            ForeColor = Color.FromArgb(175, 75, 0),
+            Visible = false
+        };
+
+        grpLan.Controls.Add(_chkEnableLan);
+        grpLan.Controls.Add(lblAdapter);
+        grpLan.Controls.Add(_cmbAdapters);
+        grpLan.Controls.Add(_btnRefreshAdapters);
+        grpLan.Controls.Add(_lblLanStatus);
+        grpLan.Controls.Add(_lblPhoneUrl);
+        grpLan.Controls.Add(_btnCopyPhoneUrl);
+        grpLan.Controls.Add(_lblLanSecurityNotice);
+        mainLayout.Controls.Add(grpLan, 0, 4);
+
+        // Group 6: Activity Log
         var grpLog = new GroupBox
         {
             Text = "Activity Log (Strictly Redacted)",
@@ -369,7 +556,7 @@ public sealed class CompanionMainForm : Form
             Font = new Font("Consolas", 9f)
         };
         grpLog.Controls.Add(_txtLog);
-        mainLayout.Controls.Add(grpLog, 0, 4);
+        mainLayout.Controls.Add(grpLog, 0, 5);
 
         Controls.Add(mainLayout);
     }
@@ -378,9 +565,15 @@ public sealed class CompanionMainForm : Form
     {
         try
         {
+            bool isLanActive = _settings.EnablePhoneAccess && !string.IsNullOrWhiteSpace(_settings.SelectedIpAddress);
+            string phoneHttpUrl = isLanActive
+                ? $"http://{_settings.SelectedIpAddress}:5100"
+                : "http://127.0.0.1:5100";
+
             string clientRelayUrl = Environment.GetEnvironmentVariable("TEAMS_REMOTE_CLIENT_RELAY_URL")?.Trim() is { Length: > 0 } explicitUrl
                 ? explicitUrl
-                : _relayUri.ToString().Replace("/ws/companion", "/ws/client");
+                : (isLanActive ? $"ws://{_settings.SelectedIpAddress}:5100/ws/client" : "ws://127.0.0.1:5100/ws/client");
+
             var challenge = _pairingService.CreateSingleUseChallenge(clientRelayUrl);
 
             // Register ephemeral challenge with relay
@@ -409,7 +602,12 @@ public sealed class CompanionMainForm : Form
             LogMessage($"Generated single-use pairing code ({challenge.PairingCode}). Expires in 60s.");
             LogMessage($"[PAIRING] Client Relay URL: {clientRelayUrl}");
 
-            using var qrDialog = new PairingQrDialog(qrBitmap, challenge.PairingCode, qrPayload);
+            using var qrDialog = new PairingQrDialog(
+                qrBitmap,
+                challenge.PairingCode,
+                qrPayload,
+                phoneHttpUrl,
+                isLanActive);
             qrDialog.ShowDialog(this);
         }
         catch (Exception ex)
@@ -708,6 +906,216 @@ public sealed class CompanionMainForm : Form
         Activate();
     }
 
+    private void OpenWebRemoteInBrowser()
+    {
+        try
+        {
+            string targetUrl = _settings.EnablePhoneAccess && !string.IsNullOrWhiteSpace(_settings.SelectedIpAddress)
+                ? $"http://{_settings.SelectedIpAddress}:5100"
+                : "http://127.0.0.1:5100";
+
+            Process.Start(new ProcessStartInfo(targetUrl) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            LogMessage($"Failed to launch browser: {ex.Message}");
+        }
+    }
+
+    private sealed record NetworkAdapterComboItem(NetworkAdapterInfo? Adapter, string Text)
+    {
+        public override string ToString() => Text;
+    }
+
+    private void RefreshAdaptersList()
+    {
+        _availableAdapters = NetworkInterfaceScanner.GetPrivateRfc1918Adapters();
+        _cmbAdapters.Items.Clear();
+        _cmbAdapters.Items.Add(new NetworkAdapterComboItem(null, "-- Select an adapter --"));
+
+        int selectIndex = 0;
+        for (int i = 0; i < _availableAdapters.Count; i++)
+        {
+            var adapter = _availableAdapters[i];
+            _cmbAdapters.Items.Add(new NetworkAdapterComboItem(adapter, adapter.DisplayName));
+
+            if (_settings.EnablePhoneAccess && !string.IsNullOrWhiteSpace(_settings.SelectedAdapterId) &&
+                adapter.Id == _settings.SelectedAdapterId)
+            {
+                selectIndex = i + 1;
+            }
+        }
+
+        _cmbAdapters.SelectedIndex = selectIndex;
+    }
+
+    private void OnAdapterSelectedIndexChanged(object? sender, EventArgs e)
+    {
+        if (_cmbAdapters.SelectedItem is NetworkAdapterComboItem item && item.Adapter != null)
+        {
+            _settings.SelectedAdapterId = item.Adapter.Id;
+            _settings.SelectedIpAddress = item.Adapter.IpAddressString;
+        }
+    }
+
+    private async void OnEnableLanCheckedChanged(object? sender, EventArgs e)
+    {
+        if (_isUpdatingLanSettingsUi) return;
+
+        if (_chkEnableLan.Checked)
+        {
+            // Require explicit adapter selection: never auto-select
+            if (_cmbAdapters.SelectedIndex <= 0 || _cmbAdapters.SelectedItem is not NetworkAdapterComboItem selectedItem || selectedItem.Adapter == null)
+            {
+                MessageBox.Show(
+                    "Please select an active private Wi-Fi or Ethernet adapter from the list before enabling phone access.",
+                    "Adapter Required",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+
+                _isUpdatingLanSettingsUi = true;
+                _chkEnableLan.Checked = false;
+                _isUpdatingLanSettingsUi = false;
+                return;
+            }
+
+            var adapter = selectedItem.Adapter;
+
+            // Step 1: User consent explanation
+            string consentMessage =
+                $"Enabling phone access allows your mobile device to open Teams Remote at http://{adapter.IpAddressString}:5100 on your local Wi-Fi.\n\n" +
+                "Windows Defender Firewall requires administrator elevation (UAC) to configure the inbound rule:\n" +
+                $"• Name: {WindowsFirewallService.RuleName}\n" +
+                $"• Scope: {_firewallService.GetExecutablePath()}\n" +
+                "• Profile: Private network only\n" +
+                "• Remote Address: LocalSubnet only\n" +
+                "• Port: TCP 5100\n\n" +
+                "⚠️ Security Notice (Trusted Private-Network Mode):\n" +
+                "Local Wi-Fi traffic in this phase is unencrypted HTTP. Use only on trusted, password-protected private networks.\n\n" +
+                "Do you want to proceed and open the Windows elevation prompt?";
+
+            var consentResult = MessageBox.Show(
+                consentMessage,
+                "Enable Phone Access — Trusted Private-Network Mode",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question);
+
+            if (consentResult != DialogResult.Yes)
+            {
+                _isUpdatingLanSettingsUi = true;
+                _chkEnableLan.Checked = false;
+                _isUpdatingLanSettingsUi = false;
+                LogMessage("LAN phone access activation was cancelled by the user.");
+                UpdateLanStatusUi(false, null);
+                return;
+            }
+
+            // Step 2: Elevated firewall rule creation
+            LogMessage("Requesting administrator approval (UAC) for Windows Firewall rule...");
+            var (firewallSuccess, firewallError) = await _firewallService.CreateRuleElevatedAsync();
+
+            if (!firewallSuccess)
+            {
+                _isUpdatingLanSettingsUi = true;
+                _chkEnableLan.Checked = false;
+                _isUpdatingLanSettingsUi = false;
+
+                MessageBox.Show(
+                    $"Administrator permission was denied or firewall configuration failed.\n\nDetails: {firewallError}\n\nPhone access remains disabled. Teams Remote is running in loopback-only mode.",
+                    "Firewall Setup Failed",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+
+                LogMessage($"[FIREWALL] Activation aborted: {firewallError}");
+                UpdateLanStatusUi(false, null);
+                return;
+            }
+
+            LogMessage($"[FIREWALL] Rule '{WindowsFirewallService.RuleName}' created successfully for {adapter.IpAddressString} (LocalSubnet).");
+
+            // Rebind Kestrel in-process host
+            try
+            {
+                LogMessage($"Rebinding Embedded Relay to 127.0.0.1 and {adapter.IpAddressString}:5100...");
+                await _relayHost.RebindAsync(adapter.IpAddressString);
+                LogMessage($"[EMBEDDED-RELAY] Active on http://127.0.0.1:5100 and http://{adapter.IpAddressString}:5100");
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"Failed to rebind Relay to {adapter.IpAddressString}: {ex.Message}");
+            }
+
+            _settings.EnablePhoneAccess = true;
+            _settings.SelectedAdapterId = adapter.Id;
+            _settings.SelectedIpAddress = adapter.IpAddressString;
+            await _settingsManager.SaveAsync(_settings);
+
+            UpdateLanStatusUi(true, adapter.IpAddressString);
+        }
+        else
+        {
+            // User unchecks setting -> clean teardown
+            LogMessage("Disabling phone access on local Wi-Fi. Rebinding to loopback-only...");
+
+            try
+            {
+                await _relayHost.RebindAsync(null);
+                LogMessage("[EMBEDDED-RELAY] Bound strictly to loopback: http://127.0.0.1:5100");
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"Error rebinding Relay to loopback: {ex.Message}");
+            }
+
+            // Remove firewall rule
+            var (removeSuccess, removeError) = await _firewallService.RemoveRuleElevatedAsync();
+            if (removeSuccess)
+            {
+                LogMessage($"[FIREWALL] Removed rule '{WindowsFirewallService.RuleName}'.");
+            }
+            else
+            {
+                LogMessage($"[FIREWALL] Rule removal note: {removeError}");
+            }
+
+            _settings.EnablePhoneAccess = false;
+            await _settingsManager.SaveAsync(_settings);
+
+            UpdateLanStatusUi(false, null);
+        }
+    }
+
+    private void UpdateLanStatusUi(bool isLanActive, string? lanIp)
+    {
+        if (InvokeRequired)
+        {
+            BeginInvoke(() => UpdateLanStatusUi(isLanActive, lanIp));
+            return;
+        }
+
+        _isUpdatingLanSettingsUi = true;
+        _chkEnableLan.Checked = isLanActive;
+        _isUpdatingLanSettingsUi = false;
+
+        if (isLanActive && !string.IsNullOrWhiteSpace(lanIp))
+        {
+            _lblLanStatus.Text = "Status: Active — Trusted Private-Network Mode (Local Wi-Fi Only)";
+            _lblLanStatus.ForeColor = Color.FromArgb(25, 135, 84); // Green
+            _lblPhoneUrl.Text = $"Phone URL: http://{lanIp}:5100";
+            _lblPhoneUrl.Visible = true;
+            _btnCopyPhoneUrl.Visible = true;
+            _lblLanSecurityNotice.Visible = true;
+        }
+        else
+        {
+            _lblLanStatus.Text = "Status: Loopback only (http://127.0.0.1:5100)";
+            _lblLanStatus.ForeColor = Color.FromArgb(108, 117, 125); // Gray
+            _lblPhoneUrl.Visible = false;
+            _btnCopyPhoneUrl.Visible = false;
+            _lblLanSecurityNotice.Visible = false;
+        }
+    }
+
     private void ExitApplication()
     {
         _passiveObserver.Dispose();
@@ -716,6 +1124,7 @@ public sealed class CompanionMainForm : Form
         _trayIcon.Dispose();
         _controller.Dispose();
         _ = _connectionClient.DisposeAsync();
+        _relayHost.Dispose();
         Application.Exit();
     }
 
@@ -738,6 +1147,7 @@ public sealed class CompanionMainForm : Form
             _trayIcon.Dispose();
             _controller.Dispose();
             _ = _connectionClient.DisposeAsync();
+            _relayHost.Dispose();
             base.OnFormClosing(e);
         }
     }

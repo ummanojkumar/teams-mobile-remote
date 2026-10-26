@@ -27,6 +27,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\TeamsRemote.Core\TeamsRemote.Core.csproj" />
     <ProjectReference Include="..\..\src\TeamsRemote.Relay\TeamsRemote.Relay.csproj" />
+    <ProjectReference Include="..\..\src\TeamsRemote.Companion\TeamsRemote.Companion.csproj" />
   </ItemGroup>
 
 </Project>

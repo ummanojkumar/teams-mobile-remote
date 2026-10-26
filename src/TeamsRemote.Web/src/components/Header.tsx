@@ -28,7 +28,12 @@ export const Header: React.FC<HeaderProps> = ({
           <ShieldCheck size={20} className="brand-logo-icon" />
         </div>
         <div>
-          <h1 className="brand-title">Teams Remote</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <h1 className="brand-title">Teams Remote</h1>
+            <span style={{ fontSize: '0.65rem', padding: '1px 5px', borderRadius: '4px', background: 'rgba(255,255,255,0.08)', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
+              v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.9.0-beta.1'}
+            </span>
+          </div>
           <div className="connection-indicator">
             {connection === 'connected' ? (
               <span className="status-pill status-connected">

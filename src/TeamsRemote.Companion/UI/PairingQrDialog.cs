@@ -9,10 +9,12 @@ public sealed class PairingQrDialog : Form
     private int _secondsRemaining = 60;
     private readonly Label _lblTimer;
 
-    public PairingQrDialog(Bitmap qrImage, string confirmationCode, string? rawPayload = null)
+    public PairingQrDialog(Bitmap qrImage, string confirmationCode, string? rawPayload = null, string? phoneUrl = null, bool isLanMode = false)
     {
-        Text = "Pair Mobile Remote (Single-Use QR)";
-        Size = new Size(380, 480);
+        Text = isLanMode
+            ? "Pair Mobile Remote (Trusted Private-Network Mode)"
+            : "Pair Mobile Remote (Single-Use QR)";
+        Size = new Size(400, 520);
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -20,11 +22,15 @@ public sealed class PairingQrDialog : Form
         Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
         BackColor = Color.FromArgb(248, 249, 250);
 
+        string instructionText = isLanMode && !string.IsNullOrWhiteSpace(phoneUrl)
+            ? $"On your phone (connected to same Wi-Fi),\nopen {phoneUrl} and enter this code:"
+            : "Scan this single-use QR code in your phone's browser:";
+
         var lblInstruction = new Label
         {
-            Text = "Scan this single-use QR code in your phone's browser:",
-            Location = new Point(20, 16),
-            Size = new Size(340, 36),
+            Text = instructionText,
+            Location = new Point(20, 12),
+            Size = new Size(360, 40),
             TextAlign = ContentAlignment.TopCenter,
             Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
             ForeColor = Color.FromArgb(33, 37, 41)
@@ -34,16 +40,16 @@ public sealed class PairingQrDialog : Form
         {
             Image = new Bitmap(qrImage),
             SizeMode = PictureBoxSizeMode.Zoom,
-            Location = new Point(90, 56),
-            Size = new Size(200, 200),
+            Location = new Point(105, 58),
+            Size = new Size(190, 190),
             BorderStyle = BorderStyle.FixedSingle
         };
 
         var lblCodeDesc = new Label
         {
             Text = "Pairing Code (Enter on Phone):",
-            Location = new Point(20, 268),
-            Size = new Size(340, 20),
+            Location = new Point(20, 256),
+            Size = new Size(360, 20),
             TextAlign = ContentAlignment.MiddleCenter,
             ForeColor = Color.FromArgb(108, 117, 125)
         };
@@ -51,7 +57,7 @@ public sealed class PairingQrDialog : Form
         var lblCode = new Label
         {
             Text = confirmationCode,
-            Location = new Point(70, 292),
+            Location = new Point(80, 280),
             Size = new Size(240, 42),
             TextAlign = ContentAlignment.MiddleCenter,
             Font = new Font("Consolas", 22f, FontStyle.Bold),
@@ -63,36 +69,45 @@ public sealed class PairingQrDialog : Form
         _lblTimer = new Label
         {
             Text = "Expires in: 60s (Single-use)",
-            Location = new Point(20, 345),
-            Size = new Size(340, 20),
+            Location = new Point(20, 330),
+            Size = new Size(360, 20),
             TextAlign = ContentAlignment.MiddleCenter,
             Font = new Font("Segoe UI", 9f, FontStyle.Italic),
             ForeColor = Color.FromArgb(220, 53, 69)
         };
 
+        var lblModeNotice = new Label
+        {
+            Text = isLanMode
+                ? "🔒 Trusted Private-Network Mode (Local Wi-Fi Only)"
+                : "🔒 Loopback Security Mode (127.0.0.1)",
+            Location = new Point(20, 355),
+            Size = new Size(360, 36),
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font = new Font("Segoe UI", 8.5f),
+            ForeColor = isLanMode ? Color.FromArgb(114, 56, 0) : Color.FromArgb(108, 117, 125)
+        };
+
         var btnCopy = new Button
         {
-            Text = "Copy Details",
-            Location = new Point(75, 380),
-            Size = new Size(110, 36),
+            Text = "Copy Code",
+            Location = new Point(80, 400),
+            Size = new Size(115, 36),
             BackColor = Color.FromArgb(13, 110, 253),
             ForeColor = Color.White,
             FlatStyle = FlatStyle.Flat
         };
         btnCopy.Click += (s, e) =>
         {
-            if (!string.IsNullOrEmpty(rawPayload))
-            {
-                Clipboard.SetText(rawPayload);
-                MessageBox.Show("Pairing JSON payload copied to clipboard!", "Copied", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
+            Clipboard.SetText(confirmationCode);
+            MessageBox.Show($"Pairing code '{confirmationCode}' copied to clipboard!", "Copied", MessageBoxButtons.OK, MessageBoxIcon.Information);
         };
 
         var btnClose = new Button
         {
             Text = "Close",
-            Location = new Point(195, 380),
-            Size = new Size(110, 36),
+            Location = new Point(205, 400),
+            Size = new Size(115, 36),
             BackColor = Color.FromArgb(108, 117, 125),
             ForeColor = Color.White,
             FlatStyle = FlatStyle.Flat
@@ -104,6 +119,7 @@ public sealed class PairingQrDialog : Form
         Controls.Add(lblCodeDesc);
         Controls.Add(lblCode);
         Controls.Add(_lblTimer);
+        Controls.Add(lblModeNotice);
         Controls.Add(btnCopy);
         Controls.Add(btnClose);
 
@@ -114,7 +130,7 @@ public sealed class PairingQrDialog : Form
             if (_secondsRemaining <= 0)
             {
                 _countdownTimer.Stop();
-                _lblTimer.Text = "EXPIRED (Close and generate new QR)";
+                _lblTimer.Text = "EXPIRED (Close and generate new code)";
                 _lblTimer.ForeColor = Color.Red;
                 picQr.Enabled = false;
             }

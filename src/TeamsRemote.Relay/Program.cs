@@ -12,22 +12,37 @@ public class Program
         CreateHostBuilder(args).Build().Run();
     }
 
-    public static IHostBuilder CreateHostBuilder(string[] args) =>
-        Host.CreateDefaultBuilder(args)
+    public static IHostBuilder CreateHostBuilder(string[]? args = null, string? listenUrl = null) =>
+        Host.CreateDefaultBuilder(args ?? Array.Empty<string>())
             .ConfigureWebHostDefaults(webBuilder =>
             {
-                bool devLan = string.Equals(
-                    Environment.GetEnvironmentVariable("TEAMS_REMOTE_DEV_LAN"),
-                    "true",
-                    StringComparison.OrdinalIgnoreCase);
-
-                if (devLan)
+                if (!string.IsNullOrWhiteSpace(listenUrl))
                 {
-                    webBuilder.UseUrls("http://0.0.0.0:5100;http://127.0.0.1:5100");
+                    webBuilder.UseUrls(listenUrl);
                 }
                 else
                 {
-                    webBuilder.UseUrls("http://127.0.0.1:5100");
+                    bool devLan = string.Equals(
+                        Environment.GetEnvironmentVariable("TEAMS_REMOTE_DEV_LAN"),
+                        "true",
+                        StringComparison.OrdinalIgnoreCase);
+
+                    if (devLan)
+                    {
+                        webBuilder.UseUrls("http://0.0.0.0:5100;http://127.0.0.1:5100");
+                    }
+                    else
+                    {
+                        webBuilder.UseUrls("http://127.0.0.1:5100");
+                    }
+                }
+
+                // Ensure web root is properly located whether running standalone or embedded
+                string contentRoot = AppContext.BaseDirectory;
+                string wwwrootPath = Path.Combine(contentRoot, "wwwroot");
+                if (Directory.Exists(wwwrootPath))
+                {
+                    webBuilder.UseWebRoot(wwwrootPath);
                 }
 
                 string? devPwaOrigin = Environment.GetEnvironmentVariable("TEAMS_REMOTE_DEV_PWA_ORIGIN");
@@ -42,13 +57,30 @@ public class Program
                             var origins = new List<string>
                             {
                                 "http://localhost:5173",
-                                "http://127.0.0.1:5173"
+                                "http://127.0.0.1:5173",
+                                "http://localhost:5100",
+                                "http://127.0.0.1:5100"
                             };
 
                             if (!string.IsNullOrWhiteSpace(devPwaOrigin) &&
                                 Uri.TryCreate(devPwaOrigin.Trim(), UriKind.Absolute, out var uri))
                             {
                                 origins.Add(uri.GetLeftPart(UriPartial.Authority));
+                            }
+
+                            if (!string.IsNullOrWhiteSpace(listenUrl))
+                            {
+                                foreach (var part in listenUrl.Split(';', StringSplitOptions.RemoveEmptyEntries))
+                                {
+                                    if (Uri.TryCreate(part.Trim(), UriKind.Absolute, out var partUri))
+                                    {
+                                        string authority = partUri.GetLeftPart(UriPartial.Authority);
+                                        if (!origins.Contains(authority))
+                                        {
+                                            origins.Add(authority);
+                                        }
+                                    }
+                                }
                             }
 
                             policy.WithOrigins(origins.ToArray())
@@ -58,7 +90,7 @@ public class Program
                     });
                 });
 
-                webBuilder.Configure(app =>
+                webBuilder.Configure((context, app) =>
                 {
                     app.UseCors();
 
@@ -69,20 +101,23 @@ public class Program
                         KeepAliveInterval = TimeSpan.FromSeconds(15)
                     });
 
-                    app.Use(async (context, next) =>
+                    app.UseDefaultFiles();
+                    app.UseStaticFiles();
+
+                    app.Use(async (httpContext, next) =>
                     {
-                        if (context.WebSockets.IsWebSocketRequest)
+                        if (httpContext.WebSockets.IsWebSocketRequest)
                         {
-                            string path = context.Request.Path.ToString().ToLowerInvariant();
+                            string path = httpContext.Request.Path.ToString().ToLowerInvariant();
 
                             if (path == "/ws/companion")
                             {
-                                using var webSocket = await context.WebSockets.AcceptWebSocketAsync();
+                                using var webSocket = await httpContext.WebSockets.AcceptWebSocketAsync();
                                 var session = new RelaySession(webSocket, SessionType.Companion);
                                 routeManager.RegisterSession(session);
 
-                                string? companionDeviceIdStr = context.Request.Query["deviceId"];
-                                string? companionToken = context.Request.Query["token"];
+                                string? companionDeviceIdStr = httpContext.Request.Query["deviceId"];
+                                string? companionToken = httpContext.Request.Query["token"];
                                 if (Guid.TryParse(companionDeviceIdStr, out var compDevId) && !string.IsNullOrEmpty(companionToken))
                                 {
                                     routeManager.RegisterCompanionRoute(session, compDevId, companionToken);
@@ -90,7 +125,7 @@ public class Program
 
                                 try
                                 {
-                                    await HandleSessionLoopAsync(session, routeManager, context.RequestAborted);
+                                    await HandleSessionLoopAsync(session, routeManager, httpContext.RequestAborted);
                                 }
                                 finally
                                 {
@@ -100,12 +135,12 @@ public class Program
                             }
                             else if (path == "/ws/client")
                             {
-                                using var webSocket = await context.WebSockets.AcceptWebSocketAsync();
+                                using var webSocket = await httpContext.WebSockets.AcceptWebSocketAsync();
                                 var session = new RelaySession(webSocket, SessionType.Client);
                                 routeManager.RegisterSession(session);
 
-                                string? deviceIdStr = context.Request.Query["deviceId"];
-                                string? token = context.Request.Query["token"];
+                                string? deviceIdStr = httpContext.Request.Query["deviceId"];
+                                string? token = httpContext.Request.Query["token"];
                                 if (Guid.TryParse(deviceIdStr, out var devId) && !string.IsNullOrEmpty(token))
                                 {
                                     routeManager.TryResumeClientSession(session, devId, token);
@@ -113,7 +148,7 @@ public class Program
 
                                 try
                                 {
-                                    await HandleSessionLoopAsync(session, routeManager, context.RequestAborted);
+                                    await HandleSessionLoopAsync(session, routeManager, httpContext.RequestAborted);
                                 }
                                 finally
                                 {
@@ -126,10 +161,28 @@ public class Program
                         await next();
                     });
 
-                    app.Run(async context =>
+                    app.Run(async httpContext =>
                     {
-                        context.Response.ContentType = "text/plain";
-                        await context.Response.WriteAsync("Teams Mobile Remote Authenticated Relay Service (Phase 2)");
+                        if (httpContext.Request.Path == "/health")
+                        {
+                            httpContext.Response.ContentType = "application/json";
+                            await httpContext.Response.WriteAsync("{\"status\":\"healthy\",\"service\":\"TeamsRemote.Relay\"}");
+                            return;
+                        }
+
+                        // SPA fallback: if index.html exists in wwwroot, serve it
+                        var env = app.ApplicationServices.GetRequiredService<IWebHostEnvironment>();
+                        string webRoot = env.WebRootPath ?? Path.Combine(AppContext.BaseDirectory, "wwwroot");
+                        string indexPath = Path.Combine(webRoot, "index.html");
+                        if (File.Exists(indexPath))
+                        {
+                            httpContext.Response.ContentType = "text/html; charset=utf-8";
+                            await httpContext.Response.SendFileAsync(indexPath);
+                            return;
+                        }
+
+                        httpContext.Response.ContentType = "text/plain";
+                        await httpContext.Response.WriteAsync("Teams Mobile Remote Authenticated Relay Service");
                     });
                 });
             });
