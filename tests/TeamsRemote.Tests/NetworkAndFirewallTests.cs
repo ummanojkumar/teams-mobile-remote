@@ -188,6 +188,7 @@ public sealed class NetworkAndFirewallTests : IDisposable
     [Theory]
     [InlineData(0, 9, 0, 1, "beta.1", "0.9.0.1", "0.9.0-beta.1")]
     [InlineData(0, 9, 0, 2, "beta.2", "0.9.0.2", "0.9.0-beta.2")]
+    [InlineData(0, 9, 0, 3, "beta.3", "0.9.0.3", "0.9.0-beta.3")]
     [InlineData(1, 0, 0, 0, "", "1.0.0.0", "1.0.0")]
     public void VersionMapping_MapsCorrectlyBetweenSemVerAndMsix(
         int major, int minor, int patch, int build, string prerelease,

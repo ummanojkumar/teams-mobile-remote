@@ -12,8 +12,15 @@ public class Program
         CreateHostBuilder(args).Build().Run();
     }
 
-    public static IHostBuilder CreateHostBuilder(string[]? args = null, string? listenUrl = null) =>
+    public static IHostBuilder CreateHostBuilder(
+        string[]? args = null,
+        string? listenUrl = null,
+        Action<ILoggingBuilder>? configureLogging = null) =>
         Host.CreateDefaultBuilder(args ?? Array.Empty<string>())
+            .ConfigureLogging((hostContext, logging) =>
+            {
+                configureLogging?.Invoke(logging);
+            })
             .ConfigureWebHostDefaults(webBuilder =>
             {
                 if (!string.IsNullOrWhiteSpace(listenUrl))

@@ -259,7 +259,7 @@ public sealed class CompanionMainForm : Form
         {
             infoVer = infoVer.Split('+')[0];
         }
-        string verDisplay = !string.IsNullOrWhiteSpace(infoVer) ? $"v{infoVer}" : "v0.9.0-beta.1";
+        string verDisplay = !string.IsNullOrWhiteSpace(infoVer) ? $"v{infoVer}" : "v0.9.0-beta.3";
         Text = $"Teams Mobile Remote — Companion ({verDisplay})";
         Size = new Size(680, 800);
         MinimumSize = new Size(640, 720);
@@ -909,6 +909,8 @@ public sealed class CompanionMainForm : Form
     {
         string timestamp = DateTime.Now.ToString("HH:mm:ss");
         string sanitized = RedactionHelper.RedactSecrets(RedactionHelper.RedactFilePath(message));
+
+        Logging.CompanionLog.Info(sanitized, "CompanionUI");
 
         if (InvokeRequired)
         {

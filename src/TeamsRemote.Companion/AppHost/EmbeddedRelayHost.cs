@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net.Http;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace TeamsRemote.Companion.AppHost;
 
@@ -33,20 +34,32 @@ public sealed class EmbeddedRelayHost : IAsyncDisposable, IDisposable
         // Check if an existing relay service is already running on loopback
         if (await IsHealthyAsync(cancellationToken))
         {
-            Trace.WriteLine($"EmbeddedRelayHost: Existing healthy Relay detected on {_listenUrls}.");
+            Logging.CompanionLog.Info($"EmbeddedRelayHost: Existing healthy Relay detected on {_listenUrls}.");
             return;
         }
 
         try
         {
-            var hostBuilder = Relay.Program.CreateHostBuilder(Array.Empty<string>(), _listenUrls);
+            var hostBuilder = Relay.Program.CreateHostBuilder(
+                Array.Empty<string>(),
+                _listenUrls,
+                logging =>
+                {
+                    logging.ClearProviders();
+                    logging.AddProvider(new Logging.CompanionLoggerProvider(Logging.CompanionLogPolicy.Current));
+                    if (Logging.CompanionLogPolicy.Current.IsConsoleEnabled)
+                    {
+                        logging.AddConsole();
+                    }
+                });
+
             _host = hostBuilder.Build();
             await _host.StartAsync(cancellationToken);
-            Trace.WriteLine($"EmbeddedRelayHost: In-process Kestrel started successfully on {_listenUrls}.");
+            Logging.CompanionLog.Info($"EmbeddedRelayHost: In-process Kestrel started successfully on {_listenUrls}.");
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"EmbeddedRelayHost: Failed to start in-process Kestrel: {ex.Message}");
+            Logging.CompanionLog.Error($"EmbeddedRelayHost: Failed to start in-process Kestrel: {ex.Message}", ex);
             throw;
         }
     }

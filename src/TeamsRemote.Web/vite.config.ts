@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 // Read central version from repository root version.json
-let appVersion = '0.9.0-beta.2';
+let appVersion = '0.9.0-beta.3';
 try {
   const versionFilePath = path.resolve(import.meta.dirname, '../../version.json');
   if (fs.existsSync(versionFilePath)) {
