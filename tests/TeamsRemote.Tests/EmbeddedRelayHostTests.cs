@@ -21,7 +21,7 @@ public class EmbeddedRelayHostTests
 
         var infoVerAttr = coreAsm.GetCustomAttribute<AssemblyInformationalVersionAttribute>();
         Assert.NotNull(infoVerAttr);
-        Assert.Contains("0.9.0-beta.1", infoVerAttr.InformationalVersion);
+        Assert.Contains("0.9.0-beta.2", infoVerAttr.InformationalVersion);
     }
 
     [Fact]

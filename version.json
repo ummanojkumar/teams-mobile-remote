@@ -2,8 +2,8 @@
   "major": 0,
   "minor": 9,
   "patch": 0,
-  "build": 1,
-  "prerelease": "beta.1",
+  "build": 2,
+  "prerelease": "beta.2",
   "channel": "beta",
   "protocolVersion": 1
 }

@@ -94,7 +94,7 @@ export const DiagnosticsDrawer: React.FC<DiagnosticsDrawerProps> = ({
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', background: 'rgba(255,255,255,0.03)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
             <span>Client Build Version</span>
             <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--accent-cyan)' }}>
-              v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.9.0-beta.1'}
+              v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.9.0-beta.2'}
             </span>
           </div>
 
