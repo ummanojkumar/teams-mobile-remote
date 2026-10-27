@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  IgnorableNamespaces="uap rescap desktop">
+
+  <Identity
+    Name="TeamsMobileRemote.Companion"
+    ProcessorArchitecture="x64"
+    Publisher="{{PUBLISHER_IDENTITY}}"
+    Version="{{MSIX_VERSION}}" />
+
+  <Properties>
+    <DisplayName>Teams Remote Companion</DisplayName>
+    <PublisherDisplayName>Teams Mobile Remote</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <Description>Remote control companion for Microsoft Teams desktop meetings</Description>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="TeamsRemoteCompanion"
+      Executable="TeamsRemote.Companion.exe"
+      EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="Teams Remote Companion"
+        Description="Remote Control Companion for Microsoft Teams"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" Square310x310Logo="Assets\Square310x310Logo.png" />
+        <uap:SplashScreen Image="Assets\SplashScreen.png" />
+      </uap:VisualElements>
+      <Extensions>
+        <desktop:Extension Category="windows.startupTask" Executable="TeamsRemote.Companion.exe" EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask TaskId="TeamsRemoteStartup" Enabled="false" DisplayName="Teams Remote Companion" />
+        </desktop:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

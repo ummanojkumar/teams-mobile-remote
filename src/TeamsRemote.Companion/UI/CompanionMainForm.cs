@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Diagnostics;
 using System.Drawing;
 using System.Text.Json;
@@ -176,8 +177,31 @@ public sealed class CompanionMainForm : Form
                     _settings = await _settingsManager.LoadAsync();
                     BeginInvoke(RefreshAdaptersList);
 
-                    // Startup cleanup of any orphaned firewall rule if LAN is disabled
-                    await _firewallService.StartupOrphanCleanupAsync(_settings.EnablePhoneAccess, msg => LogMessage(msg));
+                    // Reconcile firewall rule on startup (MSIX upgrade detection & stale rule cleanup)
+                    var reconciliation = await _firewallService.ReconcileFirewallRuleOnStartupAsync(
+                        _settings.EnablePhoneAccess,
+                        (title, message) =>
+                        {
+                            var tcs = new TaskCompletionSource<bool>();
+                            BeginInvoke(() =>
+                            {
+                                var res = MessageBox.Show(this, message, title, MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                                tcs.SetResult(res == DialogResult.Yes);
+                            });
+                            return tcs.Task;
+                        },
+                        msg => LogMessage(msg));
+
+                    if (reconciliation == FirewallReconciliationResult.Declined)
+                    {
+                        _settings.EnablePhoneAccess = false;
+                        await _settingsManager.SaveAsync(_settings);
+                        BeginInvoke(() =>
+                        {
+                            _chkEnableLan.Checked = false;
+                            UpdateLanStatusUi(false, null);
+                        });
+                    }
 
                     if (_settings.EnablePhoneAccess && !string.IsNullOrWhiteSpace(_settings.SelectedIpAddress))
                     {
@@ -229,8 +253,13 @@ public sealed class CompanionMainForm : Form
 
     private void InitializeFormComponents()
     {
-        var asmVer = typeof(CompanionMainForm).Assembly.GetName().Version;
-        string verDisplay = asmVer != null ? $"v{asmVer.Major}.{asmVer.Minor}.{asmVer.Build}" : "v0.9.0-beta.1";
+        var infoVer = typeof(CompanionMainForm).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        if (!string.IsNullOrWhiteSpace(infoVer) && infoVer.Contains('+'))
+        {
+            infoVer = infoVer.Split('+')[0];
+        }
+        string verDisplay = !string.IsNullOrWhiteSpace(infoVer) ? $"v{infoVer}" : "v0.9.0-beta.1";
         Text = $"Teams Mobile Remote — Companion ({verDisplay})";
         Size = new Size(680, 800);
         MinimumSize = new Size(640, 720);

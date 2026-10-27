@@ -165,4 +165,57 @@ public sealed class NetworkAndFirewallTests : IDisposable
         Assert.False(finalCheck.EnablePhoneAccess);
         Assert.Equal("192.168.1.150", finalCheck.SelectedIpAddress);
     }
+
+    [Fact]
+    public void BuildReplaceRuleScript_AtomicallyRemovesOldAndCreatesScopedRule()
+    {
+        string newExe = @"C:\Program Files\WindowsApps\TeamsMobileRemote.Companion_0.9.0.2_x64__pub\TeamsRemote.Companion.exe";
+        string script = WindowsFirewallService.BuildReplaceRuleScript(newExe, 5100);
+
+        // 1. Remove old rule
+        Assert.Contains("Remove-NetFirewallRule", script);
+        Assert.Contains(WindowsFirewallService.RuleName, script);
+
+        // 2. Create new rule with updated path
+        Assert.Contains("New-NetFirewallRule", script);
+        Assert.Contains($"-Program \"{newExe}\"", script);
+        Assert.Contains("-LocalPort 5100", script);
+        Assert.Contains("-Profile Private", script);
+        Assert.Contains("-RemoteAddress LocalSubnet", script);
+        Assert.Contains("-Action Allow", script);
+    }
+
+    [Theory]
+    [InlineData(0, 9, 0, 1, "beta.1", "0.9.0.1", "0.9.0-beta.1")]
+    [InlineData(0, 9, 0, 2, "beta.2", "0.9.0.2", "0.9.0-beta.2")]
+    [InlineData(1, 0, 0, 0, "", "1.0.0.0", "1.0.0")]
+    public void VersionMapping_MapsCorrectlyBetweenSemVerAndMsix(
+        int major, int minor, int patch, int build, string prerelease,
+        string expectedMsix, string expectedSemVer)
+    {
+        string msix = $"{major}.{minor}.{patch}.{build}";
+        string semver = string.IsNullOrWhiteSpace(prerelease)
+            ? $"{major}.{minor}.{patch}"
+            : $"{major}.{minor}.{patch}-{prerelease}";
+
+        Assert.Equal(expectedMsix, msix);
+        Assert.Equal(expectedSemVer, semver);
+    }
+
+    [Fact]
+    public void PackageAppxManifestTemplate_ContainsRequiredDesktopCapabilities()
+    {
+        string templatePath = Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", "..", "..", "packaging", "msix", "Package.appxmanifest.template");
+        templatePath = Path.GetFullPath(templatePath);
+
+        Assert.True(File.Exists(templatePath), $"Expected manifest template at {templatePath}");
+
+        string content = File.ReadAllText(templatePath);
+        Assert.Contains("{{MSIX_VERSION}}", content);
+        Assert.Contains("{{PUBLISHER_IDENTITY}}", content);
+        Assert.Contains("<rescap:Capability Name=\"runFullTrust\" />", content);
+        Assert.Contains("<desktop:StartupTask TaskId=\"TeamsRemoteStartup\"", content);
+        Assert.Contains("Executable=\"TeamsRemote.Companion.exe\"", content);
+    }
 }

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AppInstaller
+    xmlns="http://schemas.microsoft.com/appx/appinstaller/2018"
+    Version="{{MSIX_VERSION}}"
+    Uri="{{UPDATE_URI}}/TeamsRemote.appinstaller">
+    <MainPackage
+        Name="TeamsMobileRemote.Companion"
+        Publisher="{{PUBLISHER_IDENTITY}}"
+        Version="{{MSIX_VERSION}}"
+        ProcessorArchitecture="x64"
+        Uri="{{UPDATE_URI}}/TeamsRemote-{{MSIX_VERSION}}-x64.msix" />
+    <UpdateSettings>
+        <OnLaunch HoursBetweenUpdateChecks="0" />
+        <AutomaticBackgroundTask />
+        <ForceUpdateFromAnyVersion>false</ForceUpdateFromAnyVersion>
+    </UpdateSettings>
+</AppInstaller>
