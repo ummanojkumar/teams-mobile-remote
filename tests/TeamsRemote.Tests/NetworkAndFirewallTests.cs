@@ -218,4 +218,154 @@ public sealed class NetworkAndFirewallTests : IDisposable
         Assert.Contains("<desktop:StartupTask TaskId=\"TeamsRemoteStartup\"", content);
         Assert.Contains("Executable=\"TeamsRemote.Companion.exe\"", content);
     }
+
+    [Fact]
+    public void ClassifyErrorMessage_WhenUacCancelled_ReturnsClearCancellationNotice()
+    {
+        var win32Ex = new System.ComponentModel.Win32Exception(1223); // ERROR_CANCELLED
+        string message = WindowsFirewallService.ClassifyErrorMessage(null, win32Ex, -1);
+
+        Assert.Contains("cancelled by the user", message);
+        Assert.Contains("administrator permission", message);
+    }
+
+    [Fact]
+    public void ClassifyErrorMessage_WhenPermissionDenied_ReturnsAdminRequiredNotice()
+    {
+        var result = new FirewallExecutionResult
+        {
+            Success = false,
+            ExitCode = 1,
+            ErrorMessage = "Access is denied.",
+            CategoryInfo = "PermissionDenied: (MSFT_NetFirewallRule:root/standardcimv2/MSFT_NetFirewallRule)",
+            FullyQualifiedErrorId = "Windows System Error 5,New-NetFirewallRule"
+        };
+
+        string message = WindowsFirewallService.ClassifyErrorMessage(result, null, 1);
+        Assert.Contains("Administrator access is required", message);
+        Assert.Contains("administrator privileges", message);
+    }
+
+    [Fact]
+    public void ClassifyErrorMessage_WhenPathRejectedOrPositionalParam_ReturnsPathRejectedNotice()
+    {
+        var result = new FirewallExecutionResult
+        {
+            Success = false,
+            ExitCode = 1,
+            ErrorMessage = "A positional parameter cannot be found that accepts argument 'Files\\WindowsApps...'",
+            FullyQualifiedErrorId = "PositionalParameterNotFound,New-NetFirewallRule"
+        };
+
+        string message = WindowsFirewallService.ClassifyErrorMessage(result, null, 1);
+        Assert.Contains("executable path was rejected", message);
+        Assert.Contains("positional parameter", message);
+    }
+
+    [Fact]
+    public void ClassifyErrorMessage_WhenRemoveRuleFails_ReturnsRuleReplacementNotice()
+    {
+        var result = new FirewallExecutionResult
+        {
+            Success = false,
+            ExitCode = 1,
+            FailingCommand = "Remove-NetFirewallRule",
+            ErrorMessage = "Cannot find the firewall rule."
+        };
+
+        string message = WindowsFirewallService.ClassifyErrorMessage(result, null, 1);
+        Assert.Contains("Existing app-owned firewall rule could not be replaced", message);
+    }
+
+    [Fact]
+    public void BuildEncodedPowerShellCommand_RoundtripsWithoutQuoteDegradation()
+    {
+        string rawScript = "New-NetFirewallRule -DisplayName \"TeamsMobileRemote-Companion-LAN\" -Program 'C:\\Program Files\\My App\\app.exe' -LocalPort 5100";
+        string encoded = WindowsFirewallService.BuildEncodedPowerShellCommand(rawScript);
+
+        byte[] decodedBytes = Convert.FromBase64String(encoded);
+        string decodedScript = System.Text.Encoding.Unicode.GetString(decodedBytes);
+
+        Assert.Equal(rawScript, decodedScript);
+    }
+
+    [Fact]
+    public void BuildElevatedScript_EnforcesStrictSecurityScope_AndEscapesPaths()
+    {
+        string exeWithSpacesAndQuote = @"C:\Program Files\O'Reilly\Teams Companion.exe";
+        string tempResult = @"C:\Users\User\AppData\Local\TeamsRemote\temp\fw-res.json";
+
+        string script = WindowsFirewallService.BuildElevatedScript("Create", exeWithSpacesAndQuote, 5100, tempResult);
+
+        // Strict security scope invariants
+        Assert.Contains("Profile Private", script);
+        Assert.Contains("RemoteAddress LocalSubnet", script);
+        Assert.Contains("LocalPort 5100", script);
+        Assert.Contains("Protocol TCP", script);
+        Assert.Contains("Direction Inbound", script);
+        Assert.Contains("Action Allow", script);
+
+        // Anti-fallback invariants
+        Assert.DoesNotContain("Profile Public", script);
+        Assert.DoesNotContain("RemoteAddress Any", script);
+
+        // Path single-quote escaping for PowerShell
+        Assert.Contains(@"C:\Program Files\O''Reilly\Teams Companion.exe", script);
+        Assert.Contains(@"C:\Users\User\AppData\Local\TeamsRemote\temp\fw-res.json", script);
+    }
+
+    [Fact]
+    public void RedactDiagnostic_RedactsUserFolderNames_PreservesSystemPaths()
+    {
+        string userPath = @"C:\Users\SecretUser123\AppData\Local\TeamsRemote\logs\test.log";
+        string redactedUserPath = WindowsFirewallService.RedactDiagnostic(userPath);
+
+        Assert.DoesNotContain("SecretUser123", redactedUserPath);
+        Assert.Contains(@"C:\Users\<REDACTED>\AppData\Local\TeamsRemote\logs\test.log", redactedUserPath);
+
+        string systemPath = @"C:\Program Files\WindowsApps\TeamsMobileRemote.Companion_0.9.0.1_x64__pub\TeamsRemote.Companion.exe";
+        string redactedSystemPath = WindowsFirewallService.RedactDiagnostic(systemPath);
+
+        Assert.Equal(systemPath, redactedSystemPath);
+    }
+
+    [Fact]
+    public void CreateSecureTempResultFile_CreatesFileWithStrictSecurityAndCanBeCleaned()
+    {
+        string filePath = WindowsFirewallService.CreateSecureTempResultFile();
+
+        try
+        {
+            Assert.True(File.Exists(filePath), "Temp file should exist.");
+
+            var fileInfo = new FileInfo(filePath);
+            Assert.True((fileInfo.Attributes & FileAttributes.ReparsePoint) == 0, "Temp file must not be a reparse point.");
+
+            string tempDir = WindowsFirewallService.GetTempDirectoryPath();
+            Assert.StartsWith(Path.GetFullPath(tempDir), Path.GetFullPath(filePath), StringComparison.OrdinalIgnoreCase);
+
+            // Write sample result
+            var sample = new FirewallExecutionResult
+            {
+                Success = true,
+                ExitCode = 0,
+                StdOut = "Test rule created"
+            };
+            File.WriteAllText(filePath, System.Text.Json.JsonSerializer.Serialize(sample));
+
+            var read = WindowsFirewallService.ReadAndDeleteTempResultFile(filePath);
+            Assert.NotNull(read);
+            Assert.True(read.Success);
+            Assert.Equal("Test rule created", read.StdOut);
+
+            Assert.False(File.Exists(filePath), "File should be deleted after read.");
+        }
+        finally
+        {
+            if (File.Exists(filePath))
+            {
+                File.Delete(filePath);
+            }
+        }
+    }
 }

@@ -1010,6 +1010,20 @@ public sealed class CompanionMainForm : Form
 
             var adapter = selectedItem.Adapter;
 
+            if (!NetworkInterfaceScanner.IsPrivateRfc1918(adapter.IpAddress))
+            {
+                MessageBox.Show(
+                    $"The selected network adapter IP ({adapter.IpAddressString}) is invalid or not an active private RFC 1918 interface.",
+                    "Invalid Network Adapter",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+
+                _isUpdatingLanSettingsUi = true;
+                _chkEnableLan.Checked = false;
+                _isUpdatingLanSettingsUi = false;
+                return;
+            }
+
             // Step 1: User consent explanation
             string consentMessage =
                 $"Enabling phone access allows your mobile device to open Teams Remote at http://{adapter.IpAddressString}:5100 on your local Wi-Fi.\n\n" +
@@ -1050,7 +1064,7 @@ public sealed class CompanionMainForm : Form
                 _isUpdatingLanSettingsUi = false;
 
                 MessageBox.Show(
-                    $"Administrator permission was denied or firewall configuration failed.\n\nDetails: {firewallError}\n\nPhone access remains disabled. Teams Remote is running in loopback-only mode.",
+                    $"Firewall configuration failed.\n\nDetails: {firewallError}\n\nPhone access remains disabled. Teams Remote is running in loopback-only mode.",
                     "Firewall Setup Failed",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
